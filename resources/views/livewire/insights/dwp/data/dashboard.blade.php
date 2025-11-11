@@ -174,12 +174,25 @@ new class extends Component {
 
             // Get peaks from waveforms
             $leftData = [
+<<<<<<< HEAD
+                // 'side' => round($this->getMax($leftSides)), 
+                // 'toeHeel' => round($this->getMax($leftToesHeels))
+                'side' => round($this->getMedian($leftSides)), 
+                'toeHeel' => round($this->getMedian($leftToesHeels))
+            ];
+            $rightData = [
+                // 'side' => round($this->getMax($rightSides)), 
+                // 'toeHeel' => round($this->getMax($rightToesHeels))
+                'side' => round($this->getMedian($rightSides)), 
+                'toeHeel' => round($this->getMedian($rightToesHeels))
+=======
                 'toeHeel' => round($this->getMax($leftWaveforms[0] ?? [0])),
                 'side' => round($this->getMax($leftWaveforms[1] ?? [0]))
             ];
             $rightData = [
                 'toeHeel' => round($this->getMax($rightWaveforms[0] ?? [0])),
                 'side' => round($this->getMax($rightWaveforms[1] ?? [0]))
+>>>>>>> dee3c05d05eee4d5c782d49d2efd437b82501077
             ];
             // Calculate average from recent records using enhanced PV structure
             $allPeaks = [];
@@ -633,6 +646,32 @@ new class extends Component {
                                 try { window.__dwpTimeConstraintChart.destroy(); } catch(e){}
                             }
                             window.__dwpTimeConstraintChart = new Chart(ctx3, {
+<<<<<<< HEAD
+                                type: 'line',
+                                data: dwpData, // Use the injected data
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    scales: {
+                                        x: {
+                                            grid: { color: theme.gridColor },
+                                            ticks: { color: theme.textColor }
+                                        },
+                                        y: {
+                                            beginAtZero: true,
+                                            grid: { color: theme.gridColor },
+                                            ticks: { color: theme.textColor }
+                                        }
+                                    },
+                                    plugins: {
+                                        legend: {
+                                            position: 'bottom', // Matches your image
+                                            labels: { color: theme.textColor }
+                                        },
+                                        tooltip: {
+                                            bodyColor: theme.textColor,
+                                            titleColor: theme.textColor
+=======
                             type: 'line',
                             data: dwpData,
                             options: {
@@ -664,34 +703,11 @@ new class extends Component {
                                         ticks: {
                                             color: '#000000',
                                             font: { size: 17 }
+>>>>>>> dee3c05d05eee4d5c782d49d2efd437b82501077
                                         }
                                     }
-                                },
-                                plugins: {
-                                    legend: {
-                                        position: 'bottom',
-                                        labels: { color: '#1c1b1bff' }
-                                    },
                                 }
-                            },
-                            plugins: [{
-                                afterDatasetsDraw: function(chart) {
-                                    const ctx = chart.ctx;
-                                    chart.data.datasets.forEach((dataset, i) => {
-                                        const meta = chart.getDatasetMeta(i);
-                                        meta.data.forEach((element, index) => {
-                                            const value = dataset.data[index];
-                                            if (value > 0) {
-                                                ctx.font = 'bold 15px sans-serif';
-                                                ctx.fillStyle = dataset.borderColor;
-                                                ctx.textAlign = 'center';
-                                                ctx.fillText(value, element.x, element.y - 10);
-                                            }
-                                        });
-                                    });
-                                }
-                            }]
-                        });
+                            });
                         } catch (e) { console.error('[DWP Dashboard] injected dwp chart error', e); }
                     } else {
                         console.warn('[DWP Dashboard] dwpTimeConstraintChart canvas not found');
@@ -1064,6 +1080,10 @@ new class extends Component {
                                 <div>
                                     <h2 class="text-md text-neutral-600 dark:text-neutral-400">Average Press Time</h2>
                                     <div class="p-2 rounded-md dark:bg-neutral-900 font-bold text-lg mb-2">
+<<<<<<< HEAD
+                                        <!-- {{ $machine['output']['left'] ?? 0 }} -->
+                                        {{ ($machine['output']['left'] ?? 0) + ($machine['output']['right'] ?? 0) }}
+=======
                                         {{ $machine['avgPressTime'] ?? 16 }} sec
                                     </div>
                                 </div>
@@ -1074,6 +1094,7 @@ new class extends Component {
                                     <h2 class="text-md text-neutral-600 dark:text-neutral-400">Output</h2>
                                     <div class="p-2 rounded-md dark:bg-neutral-900 font-bold text-lg">
                                         {{ $machine['output']['left'] ?? 0 }}
+>>>>>>> dee3c05d05eee4d5c782d49d2efd437b82501077
                                     </div>
                                 </div>
                             </div>
