@@ -38,16 +38,22 @@ new #[Layout("layouts.app")] class extends Component {
     public int $perPage = 20;
     public string $view = "pressure";
 
+    // Cache for computed data
+    private $cachedChartData = null;
+    private $cacheKey = null;
+
     public function mount()
     {
         if (!$this->start_at || !$this->end_at) {
             $this->setThisWeek();
         }
 
-        $this->devices = InsDwpDevice::orderBy("name")
-            ->get()
-            ->pluck("name", "id")
-            ->toArray();
+        // Cache device list - this rarely changes
+        $this->devices = cache()->remember('dwp_devices_list', 3600, function () {
+            return InsDwpDevice::orderBy("name")
+                ->pluck("name", "id")
+                ->toArray();
+        });
 
         $this->dispatch("update-menu", $this->view);
     }
@@ -57,16 +63,27 @@ new #[Layout("layouts.app")] class extends Component {
         $start = Carbon::parse($this->start_at);
         $end = Carbon::parse($this->end_at)->endOfDay();
 
+        // Use select to only fetch needed columns for pagination
         $query = InsDwpCount::select(
-            "ins_dwp_counts.*",
+            "ins_dwp_counts.id",
+            "ins_dwp_counts.line",
+            "ins_dwp_counts.mechine",
+            "ins_dwp_counts.position",
+            "ins_dwp_counts.duration",
+            "ins_dwp_counts.pv",
             "ins_dwp_counts.created_at as count_created_at"
         )
             ->whereBetween("ins_dwp_counts.created_at", [$start, $end]);
 
         if ($this->device_id) {
-            $device = InsDwpDevice::find($this->device_id);
-            if ($device) {
-                $deviceLines = $device->getLines();
+            // Cache device lines lookup
+            $cacheKey = "device_lines_{$this->device_id}";
+            $deviceLines = cache()->remember($cacheKey, 1800, function () {
+                $device = InsDwpDevice::find($this->device_id);
+                return $device ? $device->getLines() : [];
+            });
+            
+            if (!empty($deviceLines)) {
                 $query->whereIn("ins_dwp_counts.line", $deviceLines);
             }
         }
@@ -75,9 +92,8 @@ new #[Layout("layouts.app")] class extends Component {
             $query->where("ins_dwp_counts.line", "like", "%" . strtoupper(trim($this->line)) . "%");
         }
 
-        if (!empty($this->machine)) { // Changed from $this->mechine to $this->machine
-            // allow numeric or string machine identifier
-            $query->where('ins_dwp_counts.mechine', $this->machine); // Changed from $this->mechine to $this->machine
+        if (!empty($this->machine)) {
+            $query->where('ins_dwp_counts.mechine', $this->machine);
         }
 
         return $query->orderBy("ins_dwp_counts.created_at", "DESC");
@@ -180,7 +196,14 @@ new #[Layout("layouts.app")] class extends Component {
     public function with(): array
     {
         $counts = $this->getCountsQuery()->paginate($this->perPage);
-        $this->generateCharts(); // Add this line to regenerate charts when filters change
+        
+        // Only regenerate charts if filters changed
+        $currentCacheKey = $this->getCacheKey();
+        if ($this->cacheKey !== $currentCacheKey) {
+            $this->cacheKey = $currentCacheKey;
+            $this->generateCharts();
+        }
+        
         return [
             "counts" => $counts,
         ];
@@ -189,15 +212,35 @@ new #[Layout("layouts.app")] class extends Component {
     #[On("updated")]
     public function update()
     {
+        $this->cacheKey = null; // Force regeneration
         $this->generateCharts();
+    }
+
+    /**
+     * Generate a cache key based on current filters
+     */
+    private function getCacheKey(): string
+    {
+        return md5(implode('_', [
+            $this->start_at,
+            $this->end_at,
+            $this->line,
+            $this->machine,
+            $this->position,
+            $this->device_id ?? ''
+        ]));
     }
 
     // Generate Charts
     private function generateCharts()
     {
-        // Get all the relevant data points based on the filters (date, line, machine)
+        // Build base query with only necessary columns for better performance
         $dataRaw = InsDwpCount::select(
-            "ins_dwp_counts.*",
+            "ins_dwp_counts.pv",
+            "ins_dwp_counts.position",
+            "ins_dwp_counts.mechine",
+            "ins_dwp_counts.duration",
+            "ins_dwp_counts.line",
             "ins_dwp_counts.created_at as count_created_at"
         )
             ->whereBetween("ins_dwp_counts.created_at", [
@@ -210,21 +253,25 @@ new #[Layout("layouts.app")] class extends Component {
         }
 
         if (!empty($this->machine)) {
-            $dataRaw->where('ins_dwp_counts.mechine', $this->machine); // Make sure 'mechine' matches your actual DB column name
+            $dataRaw->where('ins_dwp_counts.mechine', $this->machine);
         }
 
         if (!empty($this->position)) {
             $dataRaw->where('ins_dwp_counts.position', $this->position);
         }
 
+        // Fetch data once and reuse for both charts
+        $allData = $dataRaw->get();
+        
         // Generate duration chart data
-        $this->generateDurationChart($dataRaw);
+        $this->generateDurationChart($allData);
         
         // Generate pressure summary chart data
-        $this->generatePressureSummaryChart($dataRaw);
+        $this->generatePressureSummaryChart($allData);
 
-        $presureData = $dataRaw->whereNotNull('pv')->get()->toArray();
-        $counts = collect($presureData);
+        // Filter for pressure data
+        $presureData = $allData->whereNotNull('pv');
+        $counts = $presureData;
 
         // Prepare arrays to hold median values for each of the 4 sensors
         $toeheel_left_data = [];
@@ -232,9 +279,14 @@ new #[Layout("layouts.app")] class extends Component {
         $side_left_data = [];
         $side_right_data = [];
 
-        // Loop through each database record
+        // Loop through each database record - optimized processing
         foreach ($counts as $count) {
-            $arrayPv = json_decode($count['pv'], true);
+            // Decode JSON once
+            $arrayPv = is_string($count->pv) ? json_decode($count->pv, true) : $count->pv;
+            
+            if (!is_array($arrayPv)) {
+                continue;
+            }
 
             // Check for enhanced PV structure first
             if (isset($arrayPv['waveforms']) && is_array($arrayPv['waveforms'])) {
@@ -251,14 +303,21 @@ new #[Layout("layouts.app")] class extends Component {
                 continue;
             }
 
+            // Skip if arrays are empty
+            if (empty($toeHeelArray) && empty($sideArray)) {
+                continue;
+            }
+
             // Calculate median for each sensor array
             $toeHeelMedian = $this->getMedian($toeHeelArray);
             $sideMedian = $this->getMedian($sideArray);
 
-            if ($count['position'] === 'L') {
+            // Use object property access for better performance
+            $position = $count->position ?? '';
+            if ($position === 'L') {
                 $toeheel_left_data[] = $toeHeelMedian;
                 $side_left_data[] = $sideMedian;
-            } elseif ($count['position'] === 'R') {
+            } elseif ($position === 'R') {
                 $toeheel_right_data[] = $toeHeelMedian;
                 $side_right_data[] = $sideMedian;
             }
@@ -301,80 +360,67 @@ new #[Layout("layouts.app")] class extends Component {
      * Generate Duration Chart Data
      * Categorizes batch processing times by machine
      */
-    private function generateDurationChart($query)
+    private function generateDurationChart($data)
     {
-        // Get data with duration information
-        $durationData = clone $query;
-        $durationData = $durationData->whereNotNull('duration')
-            ->whereNotNull('mechine')
-            ->get();
+        // Filter data with duration information
+        $durationData = $data->filter(function($record) {
+            return !is_null($record->duration) 
+                && $record->position === 'L' 
+                && !is_null($record->mechine);
+        });
 
         // Initialize counters for each machine (1-4)
-        $machines = [1 => [], 2 => [], 3 => [], 4 => []];
+        $machines = [
+            1 => ['too_early_max' => 0, 'too_early_min' => 0, 'on_time' => 0, 'on_time_manual' => 0],
+            2 => ['too_early_max' => 0, 'too_early_min' => 0, 'on_time' => 0, 'on_time_manual' => 0],
+            3 => ['too_early_max' => 0, 'too_early_min' => 0, 'on_time' => 0, 'on_time_manual' => 0],
+            4 => ['too_early_max' => 0, 'too_early_min' => 0, 'on_time' => 0, 'on_time_manual' => 0],
+        ];
 
+        // Batch process all records
         foreach ($durationData as $record) {
-            $duration = floatval($record->duration);
-            $machine = intval($record->mechine);
+            $duration = (float) $record->duration;
+            $machine = (int) $record->mechine;
 
             if (!isset($machines[$machine])) {
                 continue;
             }
 
-            // Categorize based on duration
+            // Categorize based on duration - optimized conditionals
             if ($duration < 10) {
-                $machines[$machine]['too_early_max'] = ($machines[$machine]['too_early_max'] ?? 0) + 1;
+                $machines[$machine]['too_early_max']++;
             } elseif ($duration < 13) {
-                $machines[$machine]['too_early_min'] = ($machines[$machine]['too_early_min'] ?? 0) + 1;
-            } elseif ($duration >= 13 && $duration <= 16) {
-                $machines[$machine]['on_time'] = ($machines[$machine]['on_time'] ?? 0) + 1;
-            } else { // > 16
-                $machines[$machine]['on_time_manual'] = ($machines[$machine]['on_time_manual'] ?? 0) + 1;
+                $machines[$machine]['too_early_min']++;
+            } elseif ($duration <= 16) { // Combined condition
+                $machines[$machine]['on_time']++;
+            } else {
+                $machines[$machine]['on_time_manual']++;
             }
         }
 
-        // Prepare data for chart
+        // Prepare data for chart - optimized array construction
         $chartData = [
             'categories' => ['Machine 1', 'Machine 2', 'Machine 3', 'Machine 4'],
             'series' => [
                 [
                     'name' => 'Too early (< 10s)',
-                    'data' => [
-                        $machines[1]['too_early_max'] ?? 0,
-                        $machines[2]['too_early_max'] ?? 0,
-                        $machines[3]['too_early_max'] ?? 0,
-                        $machines[4]['too_early_max'] ?? 0,
-                    ],
-                    'color' => '#ef4444' // Red
+                    'data' => [$machines[1]['too_early_max'], $machines[2]['too_early_max'], $machines[3]['too_early_max'], $machines[4]['too_early_max']],
+                    'color' => '#ef4444'
                 ],
                 [
                     'name' => 'Too early (<13s)',
-                    'data' => [
-                        $machines[1]['too_early_min'] ?? 0,
-                        $machines[2]['too_early_min'] ?? 0,
-                        $machines[3]['too_early_min'] ?? 0,
-                        $machines[4]['too_early_min'] ?? 0,
-                    ],
-                    'color' => '#e8e231ff' // Red
+                    'data' => [$machines[1]['too_early_min'], $machines[2]['too_early_min'], $machines[3]['too_early_min'], $machines[4]['too_early_min']],
+                    'color' => '#e8e231ff'
                 ],
                 [
                     'name' => 'On time (13-16s)',
-                    'data' => [
-                        $machines[1]['on_time'] ?? 0,
-                        $machines[2]['on_time'] ?? 0,
-                        $machines[3]['on_time'] ?? 0,
-                        $machines[4]['on_time'] ?? 0,
-                    ],
-                    'color' => '#22c55e' // Green
+                    'data' => [$machines[1]['on_time'], $machines[2]['on_time'], $machines[3]['on_time'], $machines[4]['on_time']],
+                    'color' => '#22c55e'
                 ],
                 [
                     'name' => 'Too Late (> 16s)',
-                    'data' => [
-                        $machines[1]['on_time_manual'] ?? 0,
-                        $machines[2]['on_time_manual'] ?? 0,
-                        $machines[3]['on_time_manual'] ?? 0,
-                        $machines[4]['on_time_manual'] ?? 0,
-                    ],
-                    'color' => '#f97316' // Orange
+                    'data' => [$machines[1]['on_time_manual'], $machines[2]['on_time_manual'], $machines[3]['on_time_manual'], $machines[4]['on_time_manual']],
+                    'color' => '#f97316'
                 ],
             ],
         ];
@@ -389,105 +435,93 @@ new #[Layout("layouts.app")] class extends Component {
      * Generate Pressure Summary Chart Data
      * Categorizes pressure readings by machine
      */
-    private function generatePressureSummaryChart($query)
+    private function generatePressureSummaryChart($data)
     {
-        // Get data with pressure information
-        $pressureData = clone $query;
-        $pressureData = $pressureData->whereNotNull('pv')
-            ->whereNotNull('mechine')
-            ->get();
+        // Filter data with pressure information
+        $pressureData = $data->filter(function($record) {
+            return !is_null($record->pv) 
+                && $record->position === 'L' 
+                && !is_null($record->mechine);
+        });
 
         // Initialize counters for each machine (1-4)
-        $machines = [1 => [], 2 => [], 3 => [], 4 => []];
+        $machines = [
+            1 => ['out_standard' => 0, 'warning' => 0, 'in_standard' => 0, 'high_pressure' => 0],
+            2 => ['out_standard' => 0, 'warning' => 0, 'in_standard' => 0, 'high_pressure' => 0],
+            3 => ['out_standard' => 0, 'warning' => 0, 'in_standard' => 0, 'high_pressure' => 0],
+            4 => ['out_standard' => 0, 'warning' => 0, 'in_standard' => 0, 'high_pressure' => 0],
+        ];
 
         foreach ($pressureData as $record) {
-            $machine = intval($record->mechine);
+            $machine = (int) $record->mechine;
 
             if (!isset($machines[$machine])) {
                 continue;
             }
 
             // Parse the PV data
-            $arrayPv = json_decode($record->pv, true);
+            $arrayPv = is_string($record->pv) ? json_decode($record->pv, true) : $record->pv;
+            
+            if (!is_array($arrayPv)) {
+                continue;
+            }
             
             // Extract waveforms based on format
             if (isset($arrayPv['waveforms']) && is_array($arrayPv['waveforms'])) {
-                // Enhanced format: extract waveforms
                 $waveforms = $arrayPv['waveforms'];
                 $toeHeelArray = $waveforms[0] ?? [];
                 $sideArray = $waveforms[1] ?? [];
             } elseif (isset($arrayPv[0]) && isset($arrayPv[1])) {
-                // Legacy format: direct array access
                 $toeHeelArray = $arrayPv[0];
                 $sideArray = $arrayPv[1];
             } else {
-                // Invalid format, skip this record
                 continue;
             }
 
-            // Calculate median pressure for this record
+            // Skip if no data
+            if (empty($toeHeelArray) && empty($sideArray)) {
+                continue;
+            }
+
+            // Calculate median pressure for this record - optimized merge
             $allPressureValues = array_merge($toeHeelArray, $sideArray);
             $medianPressure = $this->getMedian($allPressureValues);
 
-            // Categorize based on pressure value
+            // Categorize based on pressure value - optimized conditionals
             if ($medianPressure < 20) {
-                // Out of standard
-                $machines[$machine]['out_standard'] = ($machines[$machine]['out_standard'] ?? 0) + 1;
+                $machines[$machine]['out_standard']++;
             } elseif ($medianPressure < 30) {
-                // Warning
-                $machines[$machine]['warning'] = ($machines[$machine]['warning'] ?? 0) + 1;
-            } elseif ($medianPressure >= 30 && $medianPressure <= 45) {
-                // In standard
-                $machines[$machine]['in_standard'] = ($machines[$machine]['in_standard'] ?? 0) + 1;
-            } else { // > 45
-                // High pressure
-                $machines[$machine]['high_pressure'] = ($machines[$machine]['high_pressure'] ?? 0) + 1;
+                $machines[$machine]['warning']++;
+            } elseif ($medianPressure <= 45) {
+                $machines[$machine]['in_standard']++;
+            } else {
+                $machines[$machine]['high_pressure']++;
             }
         }
 
-        // Prepare data for chart
+        // Prepare data for chart - optimized array construction
         $chartData = [
             'categories' => ['Machine 1', 'Machine 2', 'Machine 3', 'Machine 4'],
             'series' => [
                 [
                     'name' => 'Out Standard (< 20 kg)',
-                    'data' => [
-                        $machines[1]['out_standard'] ?? 0,
-                        $machines[2]['out_standard'] ?? 0,
-                        $machines[3]['out_standard'] ?? 0,
-                        $machines[4]['out_standard'] ?? 0,
-                    ],
-                    'color' => '#ef4444' // Red
+                    'data' => [$machines[1]['out_standard'], $machines[2]['out_standard'], $machines[3]['out_standard'], $machines[4]['out_standard']],
+                    'color' => '#ef4444'
                 ],
                 [
                     'name' => 'Warning (< 30 kg)',
-                    'data' => [
-                        $machines[1]['warning'] ?? 0,
-                        $machines[2]['warning'] ?? 0,
-                        $machines[3]['warning'] ?? 0,
-                        $machines[4]['warning'] ?? 0,
-                    ],
-                    'color' => '#eab308' // Yellow
+                    'data' => [$machines[1]['warning'], $machines[2]['warning'], $machines[3]['warning'], $machines[4]['warning']],
+                    'color' => '#eab308'
                 ],
                 [
                     'name' => 'In Standard (30-45 kg)',
-                    'data' => [
-                        $machines[1]['in_standard'] ?? 0,
-                        $machines[2]['in_standard'] ?? 0,
-                        $machines[3]['in_standard'] ?? 0,
-                        $machines[4]['in_standard'] ?? 0,
-                    ],
-                    'color' => '#22c55e' // Green
+                    'data' => [$machines[1]['in_standard'], $machines[2]['in_standard'], $machines[3]['in_standard'], $machines[4]['in_standard']],
+                    'color' => '#22c55e'
                 ],
                 [
                     'name' => 'High Pressure (> 45 kg)',
-                    'data' => [
-                        $machines[1]['high_pressure'] ?? 0,
-                        $machines[2]['high_pressure'] ?? 0,
-                        $machines[3]['high_pressure'] ?? 0,
-                        $machines[4]['high_pressure'] ?? 0,
-                    ],
-                    'color' => '#f97316' // Orange
+                    'data' => [$machines[1]['high_pressure'], $machines[2]['high_pressure'], $machines[3]['high_pressure'], $machines[4]['high_pressure']],
+                    'color' => '#f97316'
                 ],
             ],
         ];
@@ -633,7 +667,7 @@ new #[Layout("layouts.app")] class extends Component {
                                 }
                             },
                             title: {
-                                text: 'DWP Machine Performance Boxplot'
+                                text: 'DWP Machine Performance'
                             },
                             xaxis: {
                                 // --- FIX 4: Removed Redundant Categories ---
@@ -983,7 +1017,7 @@ new #[Layout("layouts.app")] class extends Component {
                             labels: labels,
                             colors: colors,
                             title: {
-                                text: 'Press time Summary (%)',
+                                text: 'Press Time Summary (%)',
                                 align: 'center'
                             },
                             tooltip: {

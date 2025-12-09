@@ -382,3 +382,185 @@ Route::get('/ctc-recipes/recommendation', function (Request $request) {
         ]
     ]);
 });
+
+// ENDPOINT 4: Loadcell upload
+Route::post('/loadcell-upload', function (Request $request) {
+    $validator = Validator::make($request->all(), [
+        'file' => 'required|file|mimes:json,txt|max:10240', // Max 10MB
+        'operator_name' => 'nullable|string|max:50',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'status' => 'error',
+            'message' => $validator->errors()->first()
+        ], 400);
+    }
+
+    try {
+        // Read JSON file
+        $file = $request->file('file');
+        $jsonContent = file_get_contents($file->getRealPath());
+        $data = json_decode($jsonContent, true);
+        $operatorName = $request->input('operator_name', 'Operator');
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Invalid JSON format: ' . json_last_error_msg()
+            ], 400);
+        }
+
+        // Validate required structure
+        if (!isset($data['metadata']) || !isset($data['sensors'])) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Invalid data structure. Required: metadata and sensors fields.'
+            ], 400);
+        }
+
+        $metadata = $data['metadata'];
+        
+        // Validate required metadata fields
+        $requiredFields = ['plant', 'location', 'line', 'machine', 'position'];
+        foreach ($requiredFields as $field) {
+            if (!isset($metadata[$field])) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "Missing required metadata field: {$field}"
+                ], 400);
+            }
+        }
+
+        // Calculate duration from metadata
+        $duration = 0;
+        if (isset($metadata['collection_start']) && isset($metadata['collection_end'])) {
+            $start = Carbon::parse($metadata['collection_start']);
+            $end = Carbon::parse($metadata['collection_end']);
+            $duration = $end->diffInSeconds($start);
+        }
+
+        // Prepare loadcell data record
+        $loadcellData = new \App\Models\InsDwpLoadcell();
+        $loadcellData->machine_name = $metadata['machine'] ?? null;
+        $loadcellData->plant = $metadata['plant'] ?? null;
+        $loadcellData->line = $metadata['line'] ?? null;
+        $loadcellData->duration = $duration;
+        $loadcellData->position = $metadata['position'] ?? null;
+        $loadcellData->result = "std"; // Set based on your evaluation logic
+        $loadcellData->operator = $operatorName; // Set if available in metadata
+        $loadcellData->recorded_at = isset($metadata['timestamp']) 
+            ? Carbon::parse($metadata['timestamp']) 
+            : Carbon::now();
+        
+        // Store raw sensor data as JSON
+        $loadcellData->loadcell_data = json_encode([
+            'metadata' => $metadata,
+        ]);
+
+        $loadcellData->save();
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Loadcell data uploaded successfully.',
+            'data' => [
+                'id' => $loadcellData->id,
+                'plant' => $loadcellData->plant,
+                'line' => $loadcellData->line,
+                'machine' => $loadcellData->machine_name,
+                'position' => $loadcellData->position,
+                'recorded_at' => $loadcellData->recorded_at,
+                'total_cycles' => $metadata['total_cycles'] ?? 0,
+                'total_data_points' => $metadata['total_data_points'] ?? 0,
+                'max_pressure' => $metadata['max_peak_pressure'] ?? 0,
+            ]
+        ], 201);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Failed to process loadcell data: ' . $e->getMessage()
+        ], 500);
+    }
+});
+
+// ENDPOINT 5: Loadcell data direct JSON POST (alternative to file upload)
+Route::post('/api/loadcell-data', function (Request $request) {
+    try {
+        $data = $request->all();
+
+        // Validate required structure
+        if (!isset($data['metadata']) || !isset($data['sensors'])) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Invalid data structure. Required: metadata and sensors fields.'
+            ], 400);
+        }
+
+        $metadata = $data['metadata'];
+        
+        // Validate required metadata fields
+        $requiredFields = ['plant', 'line', 'machine', 'position'];
+        foreach ($requiredFields as $field) {
+            if (!isset($metadata[$field])) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "Missing required metadata field: {$field}"
+                ], 400);
+            }
+        }
+
+        // Calculate duration from metadata
+        $duration = 0;
+        if (isset($metadata['collection_start']) && isset($metadata['collection_end'])) {
+            $start = Carbon::parse($metadata['collection_start']);
+            $end = Carbon::parse($metadata['collection_end']);
+            $duration = $end->diffInSeconds($start);
+        }
+
+        // Prepare loadcell data record
+        $loadcellData = new \App\Models\InsDwpLoadcell();
+        $loadcellData->machine_name = $metadata['machine'] ?? null;
+        $loadcellData->plant = $metadata['plant'] ?? null;
+        $loadcellData->line = $metadata['line'] ?? null;
+        $loadcellData->duration = $duration;
+        $loadcellData->position = $metadata['position'] ?? null;
+        $loadcellData->range_std = $metadata['max_peak_pressure'] ?? null;
+        $loadcellData->toe_heel = null; // Set based on your logic
+        $loadcellData->side = $metadata['position'] ?? null;
+        $loadcellData->result = null; // Set based on your evaluation logic
+        $loadcellData->operator = "Operator"; // Set if available in metadata
+        $loadcellData->recorded_at = isset($metadata['timestamp']) 
+            ? Carbon::parse($metadata['timestamp']) 
+            : Carbon::now();
+        
+        // Store raw sensor data as JSON
+        $loadcellData->loadcell_data = json_encode([
+            'metadata' => $metadata,
+        ]);
+
+        $loadcellData->save();
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Loadcell data saved successfully.',
+            'data' => [
+                'id' => $loadcellData->id,
+                'plant' => $loadcellData->plant,
+                'line' => $loadcellData->line,
+                'machine' => $loadcellData->machine,
+                'position' => $loadcellData->position,
+                'recorded_at' => $loadcellData->recorded_at,
+                'total_cycles' => $metadata['total_cycles'] ?? 0,
+                'total_data_points' => $metadata['total_data_points'] ?? 0,
+                'max_pressure' => $metadata['max_peak_pressure'] ?? 0,
+            ]
+        ], 201);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Failed to process loadcell data: ' . $e->getMessage()
+        ], 500);
+    }
+});

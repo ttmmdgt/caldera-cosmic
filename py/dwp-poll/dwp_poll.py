@@ -41,13 +41,17 @@ MODBUS_TIMEOUT_SEC = 1.0
 MODBUS_PORT = 503
 MODBUS_UNIT_ID = 1
 
+# Device offline detection
+OFFLINE_THRESHOLD_SEC = 60  # If no successful read for 60 seconds, mark as offline
+HEARTBEAT_CHECK_INTERVAL_SEC = 10  # Check heartbeat every 10 seconds
+
 # MySQL
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "127.0.0.1"),
     "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USERNAME"),
-    "password": os.getenv("DB_PASSWORD"),
-    "db": os.getenv("DB_DATABASE"),
+    "user": os.getenv("DB_USERNAME", "root"),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "db": os.getenv("DB_DATABASE", "caldera_cosmic"),
     "charset": "utf8mb4",
     "autocommit": True,  # Critical for performance!
     "maxsize": 10,  # Connection pool size
@@ -61,7 +65,7 @@ MAX_BUFFER_LENGTH = 500
 CYCLE_TIMEOUT_SEC = 30
 
 # Minimum accepted cycle duration (seconds). Cycles shorter than this are ignored.
-MIN_DURATION_S = 8
+MIN_DURATION_S = 5
 
 # Split / peak tuning (tweak these for your machine)
 SPLIT_MIN_SAMPLES = 5
@@ -172,6 +176,54 @@ class DatabaseManager:
             await self.pool.wait_closed()
             logger.info("👋 MySQL pool closed")
 
+    async def log_device_status(
+        self,
+        device_id: int,
+        status: str,
+        message: str = None,
+        duration_seconds: int = None
+    ) -> bool:
+        """
+        Log device connection status changes
+        status: 'online', 'offline', 'timeout'
+        """
+        if not self.pool:
+            logger.error("❌ DB pool not initialized")
+            return False
+
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    # First check if device exists
+                    await cur.execute(
+                        "SELECT id FROM ins_dwp_devices WHERE id = %s",
+                        (device_id,)
+                    )
+                    device_exists = await cur.fetchone()
+                    
+                    if not device_exists:
+                        logger.error(
+                            f"❌ Cannot log status: Device ID {device_id} does not exist in ins_dwp_devices table. "
+                            f"Please add the device first or run: php artisan db:seed --class=InsDwpDeviceSeeder"
+                        )
+                        return False
+                    
+                    # Device exists, insert log
+                    await cur.execute(
+                        """
+                        INSERT INTO `log_dwp_uptime` (
+                            `ins_dwp_device_id`, `status`, `logged_at`, 
+                            `message`, `duration_seconds`, `created_at`, `updated_at`
+                        ) VALUES (%s, %s, NOW(), %s, %s, NOW(), NOW())
+                        """,
+                        (device_id, status, message, duration_seconds),
+                    )
+                    logger.info(f"📝 Device {device_id} status logged: {status}")
+                    return True
+        except Exception as e:
+            logger.error(f"❌ Failed to log device status: {e}")
+            return False
+
     async def save_cycle(self, cycle_data: dict) -> bool:
         if not self.pool:
             logger.error("❌ DB pool not initialized")
@@ -250,26 +302,130 @@ class DWPPoller:
         self.shutdown_event = asyncio.Event()
         # optional: only poll a single machine name (e.g., 'mc1')
         self.poll_only_machine: Optional[str] = poll_only_machine
+        # Track device connection states
+        self.device_states: Dict[int, dict] = {}  # {device_id: {'status': str, 'last_change': float, 'last_successful_read': float}}
 
     async def load_devices(self):
-        """✅ REPLACE THIS WITH REAL DB QUERY (e.g., SELECT * FROM ins_dwp_devices WHERE active=1)"""
-        # Example mock device — update with your actual config
-        self.devices = {
-            1: DeviceConfig(
-                id=1,
-                name="Press-G5",
-                ip="172.70.87.35",
-                lines={
-                    "G5": [
-                        MachineConfig("mc1", 199, 201, 200, 202),
-                        MachineConfig("mc2", 203, 205, 204, 206),
-                        MachineConfig("mc3", 309, 311, 310, 312),
-                        MachineConfig("mc4", 313, 315, 314, 316),
-                    ]
-                },
+        """Load active devices from database"""
+        if not self.db.pool:
+            logger.error("❌ DB pool not initialized, cannot load devices")
+            return
+
+        try:
+            async with self.db.pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        "SELECT id, name, ip_address, config FROM ins_dwp_devices WHERE is_active = 1"
+                    )
+                    rows = await cur.fetchall()
+                    
+                    if not rows:
+                        logger.warning("⚠️ No active devices found in database!")
+                        logger.info("💡 To add a device, run: php artisan db:seed --class=InsDwpDeviceSeeder")
+                        return
+                    
+                    for row in rows:
+                        try:
+                            config = json.loads(row['config']) if isinstance(row['config'], str) else row['config']
+                            
+                            # Parse config to extract lines and machines
+                            lines = {}
+                            for line_config in config:
+                                line_name = line_config.get('line', '').upper()
+                                machines = []
+                                
+                                # Handle different config formats
+                                machine_list = line_config.get('list_mechine', line_config.get('machines', []))
+                                
+                                for machine in machine_list:
+                                    machines.append(MachineConfig(
+                                        name=machine.get('name', ''),
+                                        addr_th_l=int(machine.get('addr_th_l', 0)),
+                                        addr_th_r=int(machine.get('addr_th_r', 0)),
+                                        addr_side_l=int(machine.get('addr_side_l', 0)),
+                                        addr_side_r=int(machine.get('addr_side_r', 0)),
+                                    ))
+                                
+                                if machines:
+                                    lines[line_name] = machines
+                            
+                            if lines:
+                                self.devices[row['id']] = DeviceConfig(
+                                    id=row['id'],
+                                    name=row['name'],
+                                    ip=row['ip_address'],
+                                    lines=lines
+                                )
+                                logger.info(f"✅ Loaded device: {row['name']} (ID: {row['id']}) at {row['ip_address']}")
+                            else:
+                                logger.warning(f"⚠️ Device {row['name']} has no valid machine configuration")
+                        
+                        except Exception as e:
+                            logger.error(f"❌ Failed to parse device {row.get('name', 'unknown')}: {e}")
+                            continue
+                    
+                    logger.info(f"✅ Loaded {len(self.devices)} active device(s)")
+        
+        except Exception as e:
+            logger.error(f"❌ Failed to load devices from database: {e}")
+            # Fallback to example config if database fails
+            logger.warning("⚠️ Using fallback configuration")
+            self.devices = {
+                1: DeviceConfig(
+                    id=1,
+                    name="Press-G5",
+                    ip="172.70.87.35",
+                    lines={
+                        "G5": [
+                            MachineConfig("mc1", 199, 201, 200, 202),
+                            MachineConfig("mc2", 203, 205, 204, 206),
+                            MachineConfig("mc3", 309, 311, 310, 312),
+                            MachineConfig("mc4", 313, 315, 314, 316),
+                        ]
+                    },
+                )
+            }
+            logger.info(f"✅ Loaded {len(self.devices)} device(s) from fallback")
+
+    async def update_device_state(self, dev_id: int, new_status: str, message: str = None):
+        """
+        Update device connection state and log to database when status changes
+        """
+        if dev_id not in self.device_states:
+            self.device_states[dev_id] = {
+                'status': new_status,
+                'last_change': time.time()
+            }
+            await self.db.log_device_status(dev_id, new_status, message)
+            return
+
+        current_state = self.device_states[dev_id]
+        old_status = current_state['status']
+        
+        # Only log if status actually changed
+        if old_status != new_status:
+            now = time.time()
+            duration_seconds = int(now - current_state['last_change'])
+            
+            # Log the new status with duration in previous state
+            await self.db.log_device_status(
+                dev_id, 
+                new_status, 
+                message, 
+                duration_seconds
             )
-        }
-        logger.info(f"✅ Loaded {len(self.devices)} active device(s)")
+            
+            # Update state
+            self.device_states[dev_id] = {
+                'status': new_status,
+                'last_change': now
+            }
+            
+            # Log status change
+            logger.info(
+                f"🔄 Device {dev_id} status changed: {old_status} → {new_status} "
+                f"(was {old_status} for {duration_seconds}s)"
+            )
 
     async def connect_clients(self):
         for dev_id, dev in self.devices.items():
@@ -279,19 +435,50 @@ class DWPPoller:
             await client.connect()
             if client.connected:
                 self.clients[dev_id] = client
+                # Initialize device state and log ONLINE
+                self.device_states[dev_id] = {
+                    'status': 'online',
+                    'last_change': time.time(),
+                    'last_successful_read': time.time()
+                }
+                await self.db.log_device_status(
+                    dev_id, 
+                    'online', 
+                    f"Successfully connected to {dev.name} at {dev.ip}"
+                )
                 logger.info(f"🔌 Connected to {dev.name} ({dev.ip})")
             else:
+                # Initialize as offline and log
+                self.device_states[dev_id] = {
+                    'status': 'offline',
+                    'last_change': time.time(),
+                    'last_successful_read': None
+                }
+                await self.db.log_device_status(
+                    dev_id, 
+                    'offline', 
+                    f"Failed to connect to {dev.name} at {dev.ip}"
+                )
                 logger.error(f"❌ Failed to connect to {dev.name} ({dev.ip})")
 
     async def read_registers(
-        self, client: AsyncModbusTcpClient, addresses: List[int]
+        self, client: AsyncModbusTcpClient, addresses: List[int], dev_id: int = None
     ) -> List[int]:
         try:
             start_addr = min(addresses)
             count = max(addresses) - start_addr + 1
-            response = await client.read_input_registers(
-                address=start_addr, count=count, slave=MODBUS_UNIT_ID
-            )
+            # Try with 'unit' parameter (newer pymodbus 3.x)
+            # If that fails, try without it (some versions don't need it)
+            try:
+                response = await client.read_input_registers(
+                    address=start_addr, count=count, unit=MODBUS_UNIT_ID
+                )
+            except TypeError:
+                # Fallback: try without unit parameter
+                response = await client.read_input_registers(
+                    address=start_addr, count=count
+                )
+            
             if response.isError():
                 raise ModbusException(f"Modbus error: {response}")
 
@@ -302,8 +489,23 @@ class DWPPoller:
                 values.append(
                     response.registers[idx] if idx < len(response.registers) else 0
                 )
+            
+            # Success - update device state to online ONLY if it was NOT online before
+            if dev_id and dev_id in self.device_states:
+                # Track last successful read timestamp
+                self.device_states[dev_id]['last_successful_read'] = time.time()
+                current_status = self.device_states[dev_id].get('status')
+                if current_status != 'online':
+                    await self.update_device_state(dev_id, 'online', 'Connection restored')
+            
             return values
         except Exception as e:
+            # Log timeout or error
+            if dev_id and dev_id in self.device_states:
+                if 'timeout' in str(e).lower():
+                    await self.update_device_state(dev_id, 'timeout', f"Modbus read timeout: {e}")
+                else:
+                    await self.update_device_state(dev_id, 'offline', f"Modbus read failed: {e}")
             logger.error(f"Modbus read failed: {e}")
             raise
 
@@ -324,9 +526,22 @@ class DWPPoller:
             machine.addr_side_r,
         ]
         try:
-            vals = await self.read_registers(client, addrs)
+            vals = await self.read_registers(client, addrs, dev.id)
             th_l, th_r, side_l, side_r = vals
-        except:
+        except Exception as e:
+            # Log potential data loss when read fails during active cycles
+            if key_l in self.cycle_states and self.cycle_states[key_l].get("state") == "active":
+                logger.warning(
+                    f"⚠️ READ FAILED DURING ACTIVE CYCLE | {key_l} | "
+                    f"Current samples: {len(self.cycle_states[key_l].get('th_buf', []))} | "
+                    f"Error: {e}"
+                )
+            if key_r in self.cycle_states and self.cycle_states[key_r].get("state") == "active":
+                logger.warning(
+                    f"⚠️ READ FAILED DURING ACTIVE CYCLE | {key_r} | "
+                    f"Current samples: {len(self.cycle_states[key_r].get('th_buf', []))} | "
+                    f"Error: {e}"
+                )
             return
 
         await self.process_position(line, machine.name, "L", th_l, side_l, key_l)
@@ -343,13 +558,28 @@ class DWPPoller:
             state["state"] != "idle"
             and (now - state.get("start_time", 0)) > CYCLE_TIMEOUT_SEC
         ):
-            logger.warning(f"⏱️  Cycle {key} timed out — saving as TIMEOUT and resetting")
+            elapsed_ms = int((now - state.get("start_time", now)) * 1000)
+            sample_count = len(state.get("th_buf", []))
+            max_th = max(state.get("th_buf", [0])) if state.get("th_buf") else 0
+            max_side = max(state.get("side_buf", [0])) if state.get("side_buf") else 0
+            
+            logger.warning(
+                f"⏱️  TIMEOUT DATA LOSS RISK | {key} | "
+                f"Duration: {elapsed_ms}ms (>{CYCLE_TIMEOUT_SEC}s) | "
+                f"Samples: {sample_count} | TH_max: {max_th} | Side_max: {max_side} | "
+                f"Attempting to save as TIMEOUT cycle..."
+            )
+            
             # try to save whatever we have as a TIMEOUT cycle
             try:
-                elapsed_ms = int((now - state.get("start_time", now)) * 1000)
                 await self.save_cycle_to_db(line, machine_name, pos, state, elapsed_ms, "TIMEOUT")
+                logger.info(f"✅ TIMEOUT cycle saved successfully for {key}")
             except Exception as e:
-                logger.error(f"❌ Failed to save TIMEOUT cycle {key}: {e}")
+                logger.error(
+                    f"❌ DATA LOST - Failed to save TIMEOUT cycle {key}: {e} | "
+                    f"Lost data: samples={sample_count}, duration={elapsed_ms}ms, "
+                    f"TH_max={max_th}, Side_max={max_side}"
+                )
             state["state"] = "idle"
 
         # State machine
@@ -390,7 +620,14 @@ class DWPPoller:
 
             # Buffer overflow
             if len(state["th_buf"]) > MAX_BUFFER_LENGTH:
-                logger.warning(f"⚠️ Buffer overflow {key} — saving as OVERFLOW")
+                max_th_current = max(state["th_buf"]) if state["th_buf"] else 0
+                max_side_current = max(state["side_buf"]) if state["side_buf"] else 0
+                logger.warning(
+                    f"⚠️ BUFFER OVERFLOW - FORCING SAVE | {key} | "
+                    f"Buffer size: {len(state['th_buf'])} > MAX_BUFFER_LENGTH ({MAX_BUFFER_LENGTH}) | "
+                    f"Duration so far: {int(elapsed_ms)}ms | "
+                    f"TH_max: {max_th_current} | Side_max: {max_side_current}"
+                )
                 await self.save_cycle_to_db(
                     line, machine_name, pos, state, int(elapsed_ms), "OVERFLOW"
                 )
@@ -562,8 +799,12 @@ class DWPPoller:
 
         # If the entire buffer is shorter than MIN_DURATION_S, skip saving/splitting
         if duration_s < MIN_DURATION_S:
+            max_th = max(th_buf) if th_buf else 0
+            max_side = max(side_buf) if side_buf else 0
             logger.info(
-                f"⏭️ Skipping {line}-{machine_name}-{pos}: total duration {duration_s:.1f}s < MIN_DURATION_S ({MIN_DURATION_S}s) - not saving or splitting"
+                f"⏭️ SHORT CYCLE SKIPPED - NOT SAVED | {line}-{machine_name}-{pos} | "
+                f"Duration: {duration_s:.1f}s < MIN_DURATION_S ({MIN_DURATION_S}s) | "
+                f"Samples: {len(th_buf)} | TH_max: {max_th} | Side_max: {max_side}"
             )
             return
 
@@ -614,21 +855,17 @@ class DWPPoller:
         # Convert to seconds for storage/visualization (float seconds)
         duration_s = duration_ms_field / 1000.0
 
-        # Skip cycles that are too short to be meaningful
-        if duration_s < MIN_DURATION_S:
-            logger.info(
-                f"⏭️ Skipping {line}-{machine_name}-{pos}: duration {duration_s:.1f}s < MIN_DURATION_S ({MIN_DURATION_S}s)"
-            )
-            return
-
         # 🆕 WAVEFORM SANITY CHECK
         is_sane, reason = self.validate_waveform_sanity(
-            th_buf, side_buf, sample_count, duration_ms, pos, timestamps_ms
+            th_buf, side_buf, sample_count, duration_ms_field, pos, timestamps_ms
         )
         if not is_sane:
             logger.warning(
-                f"❌ Invalid waveform {line}-{machine_name}-{pos}: {reason} | "
-                f"TH={th_buf}, Side={side_buf}"
+                f"⚠️ INVALID WAVEFORM DETECTED - SAVING AS DEFECTIVE | {line}-{machine_name}-{pos} | "
+                f"Reason: {reason} | Duration: {duration_s:.1f}s | Samples: {sample_count} | "
+                f"TH_max: {max_th} | Side_max: {max_side} | "
+                f"TH_data: {th_buf[:10]}{'...' if len(th_buf) > 10 else ''} | "
+                f"Side_data: {side_buf[:10]}{'...' if len(side_buf) > 10 else ''}"
             )
             # Force grade to DEFECTIVE and override cycle_type
             grade = "DEFECTIVE"
@@ -659,7 +896,14 @@ class DWPPoller:
                     f"TH={max_th}, Side={max_side} | std={std_error}"
             )
         else:
-            logger.error(f"❌ Failed to save cycle {line}-{machine_name}-{pos}")
+            logger.error(
+                f"❌ DATABASE SAVE FAILED - DATA LOST | {line}-{machine_name}-{pos} | "
+                f"Grade: {grade} | Cycle_type: {cycle_type} | "
+                f"Duration: {duration_s:.3f}s | Samples: {sample_count} | "
+                f"TH_max: {max_th} | Side_max: {max_side} | "
+                f"TH_waveform: {th_buf[:20]}{'...' if len(th_buf) > 20 else ''} | "
+                f"Side_waveform: {side_buf[:20]}{'...' if len(side_buf) > 20 else ''}"
+            )
 
     async def poll_loop(self):
         while self.running:
@@ -678,6 +922,37 @@ class DWPPoller:
             elapsed = time.perf_counter() - start
             await asyncio.sleep(max(0, POLL_INTERVAL_SEC - elapsed))
 
+    async def monitor_heartbeats(self):
+        """Background task to monitor device heartbeats and mark offline after threshold"""
+        logger.info(f"💓 Heartbeat monitor started (check interval={HEARTBEAT_CHECK_INTERVAL_SEC}s, offline threshold={OFFLINE_THRESHOLD_SEC}s)")
+        
+        while self.running:
+            try:
+                now = time.time()
+                for dev_id, state in self.device_states.items():
+                    last_read = state.get('last_successful_read')
+                    current_status = state.get('status', 'unknown')
+                    
+                    # Skip if no successful read recorded yet
+                    if last_read is None:
+                        continue
+                    
+                    # Calculate time since last successful communication
+                    elapsed = now - last_read
+                    
+                    # If device was online but hasn't responded in OFFLINE_THRESHOLD_SEC, mark offline
+                    if current_status == 'online' and elapsed > OFFLINE_THRESHOLD_SEC:
+                        device_name = next((dev.name for dev in self.devices.values() if dev.id == dev_id), f"Device-{dev_id}")
+                        logger.warning(f"💔 {device_name} (ID:{dev_id}) heartbeat lost ({elapsed:.1f}s since last read)")
+                        await self.update_device_state(dev_id, 'offline', f'No response for {elapsed:.1f}s')
+                
+                # Sleep for check interval
+                await asyncio.sleep(HEARTBEAT_CHECK_INTERVAL_SEC)
+                
+            except Exception as e:
+                logger.error(f"❌ Heartbeat monitor error: {e}")
+                await asyncio.sleep(HEARTBEAT_CHECK_INTERVAL_SEC)
+
     def signal_handler(self, signum, frame):
         logger.info("🛑 Shutdown signal received...")
         self.running = False
@@ -692,7 +967,12 @@ class DWPPoller:
             await self.load_devices()
             await self.connect_clients()
             logger.info(f"🚀 DWP Poller started (interval={POLL_INTERVAL_SEC}s)")
-            await self.poll_loop()
+            
+            # Run poll_loop and heartbeat monitor concurrently
+            await asyncio.gather(
+                self.poll_loop(),
+                self.monitor_heartbeats()
+            )
         finally:
             # Cleanup (best-effort)
             for client in self.clients.values():

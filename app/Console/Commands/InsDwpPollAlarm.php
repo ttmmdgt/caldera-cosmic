@@ -39,6 +39,7 @@ class InsDwpPollAlarm extends Command
     // In-memory buffer to track last cumulative values per line
     protected $lastCumulativeValues = [];
     private $lastDurationValues = [];
+    private $lastSentDurationValues = []; // Track last sent duration per line
     public int $saveDuration = 0;
 
     // Memory optimization counters
@@ -145,43 +146,64 @@ class InsDwpPollAlarm extends Command
 
     private function sendLongDuration($device)
     {
-        $addrDwpAlarm = $device['config'][0]['dwp_alarm'];
-        // today
-        $this->start_at = Carbon::now()->startOfDay();
-        $this->end_at = Carbon::now()->endOfDay();
-        // GET LONG DURATION DATA from database
+        // GET LONG DURATION DATA from database (today's max)
         $longDurationData = InsDwpTimeAlarmCount::orderBy('duration', 'desc')
             ->whereBetween('created_at', [
-                Carbon::parse($this->start_at)->startOfDay(),
-                Carbon::parse($this->end_at)->endOfDay()
+                Carbon::now()->startOfDay(),
+                Carbon::now()->endOfDay()
             ])
             ->first();
-        if (empty($longDurationData)){
-            return [];
-        }else {
-            $longDurationData->toArray();
+        
+        // No data found - nothing to send
+        if (empty($longDurationData)) {
+            if ($this->option('d')) {
+                $this->line("  No long duration data found for today");
+            }
+            return;
         }
-        // Only send if the long duration is LESS than last sent value
-        if($longDurationData['duration'] < $this->lastDurationValues){
-            // REQUEST DATA COUNTER AND RESPONSE COUNTER
+
+        $line = $longDurationData->line;
+        $currentMaxDuration = $longDurationData->duration;
+        
+        // Get the last sent duration for this line
+        $lastSent = $this->lastSentDurationValues[$line] ?? null;
+        
+        // Only send if the duration has INCREASED (new maximum detected)
+        if ($lastSent === null || $currentMaxDuration > $lastSent) {
             try {
+                // Get register address from config or use default
+                $registerAddr = $device->config[0]['dwp_alarm']['addr_long_duration'] ?? 609;
+                
                 $connection = BinaryStreamConnection::getBuilder()
-                ->setHost($device->ip_address)
-                ->setPort($this->modbusPort)
-                ->build();
+                    ->setHost($device->ip_address)
+                    ->setPort($this->modbusPort)
+                    ->build();
 
                 $packet = new WriteSingleRegisterRequest(
-                    609,    // Register address
-                    $longDurationData['duration'],   // Value
-                    1       // Unit ID
+                    609,              // Register address
+                    $currentMaxDuration,        // Value
+                    1                           // Unit ID
                 );
 
                 $connection->connect();
                 $connection->send($packet);
                 $connection->close();
+                
+                // Update last sent value
+                $this->lastSentDurationValues[$line] = $currentMaxDuration;
+                
+                if ($this->option('v')) {
+                    $this->info("  ✓ Sent max duration to {$device->name}: {$currentMaxDuration} (previous: " . ($lastSent ?? 'none') . ")");
+                }
+                
+                return true;
             } catch (\Exception $e) {
-                $this->error("    ✗ Error sending long duration to {$device->name} ({$device->ip_address}): " . $e->getMessage(). $e->getLine());
+                $this->error("    ✗ Error sending long duration to {$device->name} ({$device->ip_address}): " . $e->getMessage() . " at line " . $e->getLine());
                 return false;
+            }
+        } else {
+            if ($this->option('d')) {
+                $this->line("  No update needed - current max: {$currentMaxDuration}, last sent: {$lastSent}");
             }
         }
     }

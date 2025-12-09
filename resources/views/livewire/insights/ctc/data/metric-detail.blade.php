@@ -758,6 +758,44 @@ new class extends Component {
         );
     }
 
+    private function applySmoothingToData($data, $windowSize = 8): array
+    {
+        if (count($data) < $windowSize) {
+            return $data; // Jika data terlalu sedikit, return as is
+        }
+        
+        $smoothed = [];
+        $halfWindow = floor($windowSize / 2);
+        
+        foreach ($data as $i => $point) {
+            // Tentukan range untuk averaging
+            $start = max(0, $i - $halfWindow);
+            $end = min(count($data) - 1, $i + $halfWindow);
+            
+            // Kumpulkan nilai y dalam window yang sama side-nya
+            $sum = 0;
+            $count = 0;
+            
+            for ($j = $start; $j <= $end; $j++) {
+                // Hanya rata-rata dengan data yang sama side-nya
+                if ($data[$j]['side'] === $point['side']) {
+                    $sum += $data[$j]['y'];
+                    $count++;
+                }
+            }
+            
+            // Buat smoothed point dengan y yang di-average
+            $smoothed[] = [
+                'x' => $point['x'],
+                'y' => $count > 0 ? $sum / $count : $point['y'],
+                'side' => $point['side'],
+                'action' => $point['action'], // Keep original action
+            ];
+        }
+        
+        return $smoothed;
+    }
+
     private function prepareChartData($data): array
     {
         // Transform data for Chart.js
@@ -817,9 +855,13 @@ new class extends Component {
             }
         }
 
+        $smoothedData = $this->applySmoothingToData($chartData, 8);
+
         // Separate left and right data
-        $leftData = array_filter($chartData, fn ($item) => $item["side"] === "left");
-        $rightData = array_filter($chartData, fn ($item) => $item["side"] === "right");
+        $leftData = array_filter($smoothedData, fn ($item) => $item["side"] === "left");
+        $rightData = array_filter($smoothedData, fn ($item) => $item["side"] === "right");
+        // $leftData = array_filter($chartData, fn ($item) => $item["side"] === "left");
+        // $rightData = array_filter($chartData, fn ($item) => $item["side"] === "right");
 
         // Build datasets array starting with original sensor data
         $datasets = [
@@ -864,7 +906,7 @@ new class extends Component {
                 "label" => "Std Max",
                 "data" => $stdMaxData,
                 "borderColor" => "#9CA3AF",
-                "backgroundColor" => "transparent",
+                "backgroundColor" => "transparent", 
                 "tension" => 0.1,
                 "pointRadius" => 0,
                 "pointHoverRadius" => 2,

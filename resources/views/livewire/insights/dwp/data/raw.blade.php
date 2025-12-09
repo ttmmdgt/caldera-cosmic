@@ -7,6 +7,7 @@ use Livewire\Attributes\Url;
 use Livewire\Attributes\On;
 use App\Models\InsDwpCount;
 use App\Models\InsDwpDevice;
+use App\Models\InsDwpStandardPV;
 use App\Helpers\GlobalHelpers;
 use Carbon\Carbon;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -31,6 +32,8 @@ new #[Layout("layouts.app")] class extends Component {
     #[Url]
     public string $mechine = "";
 
+    #[Url]
+    public string $presstime = "";
 
     public array $devices = [];
     public int $perPage = 20;
@@ -56,14 +59,118 @@ new #[Layout("layouts.app")] class extends Component {
             ->pluck("name", "id")
             ->toArray();
 
+        // Load standards dynamically from database
+        $this->loadStandards();
+
         // update menu
         $this->dispatch("update-menu", $this->view);
+    }
+
+    /**
+     * Load standard values from database based on line and machine
+     * Falls back to default values if no standard found
+     */
+    private function loadStandards()
+    {
+        // Build standard name pattern based on current filters
+        $standardName = $this->buildStandardName();
+        
+        if ($standardName) {
+            $standard = InsDwpStandardPV::where('setting_name', $standardName)->first();
+            
+            if ($standard && is_array($standard->setting_value)) {
+                // Check if using new format with setting_std
+                if (isset($standard->setting_value['setting_std'])) {
+                    $this->stdTh = [
+                        $standard->setting_value['setting_std']['min_th'] ?? 30,
+                        $standard->setting_value['setting_std']['max_th'] ?? 45
+                    ];
+                    $this->stdSide = [
+                        $standard->setting_value['setting_std']['min_s'] ?? 30,
+                        $standard->setting_value['setting_std']['max_s'] ?? 45
+                    ];
+                } else {
+                    // Old format [min, max]
+                    $this->stdTh = [
+                        $standard->setting_value[0] ?? 30,
+                        $standard->setting_value[1] ?? 45
+                    ];
+                    $this->stdSide = [
+                        $standard->setting_value[0] ?? 30,
+                        $standard->setting_value[1] ?? 45
+                    ];
+                }
+            }
+        }
+    }
+
+    /**
+     * Build standard name from current filters
+     * Format: "DWP STATION BETA_{LINE}_Machine_{MACHINE}"
+     */
+    private function buildStandardName(): ?string
+    {
+        if (!$this->line || !$this->mechine) {
+            return null;
+        }
+
+        return sprintf(
+            "DWP STATION BETA_%s_Machine_%s",
+            strtoupper($this->line),
+            $this->mechine
+        );
+    }
+
+    /**
+     * Get standards for a specific line and machine
+     */
+    private function getStandardsForCount($line, $machine): array
+    {
+        $standardName = sprintf(
+            "DWP STATION BETA_%s_Machine_%s",
+            strtoupper($line),
+            $machine
+        );
+
+        $standard = InsDwpStandardPV::where('setting_name', $standardName)->first();
+        
+        if ($standard && is_array($standard->setting_value)) {
+            if (isset($standard->setting_value['setting_std'])) {
+                return [
+                    'th' => [
+                        $standard->setting_value['setting_std']['min_th'] ?? 30,
+                        $standard->setting_value['setting_std']['max_th'] ?? 45
+                    ],
+                    'side' => [
+                        $standard->setting_value['setting_std']['min_s'] ?? 30,
+                        $standard->setting_value['setting_std']['max_s'] ?? 45
+                    ]
+                ];
+            } else {
+                return [
+                    'th' => [
+                        $standard->setting_value[0] ?? 30,
+                        $standard->setting_value[1] ?? 45
+                    ],
+                    'side' => [
+                        $standard->setting_value[0] ?? 30,
+                        $standard->setting_value[1] ?? 45
+                    ]
+                ];
+            }
+        }
+
+        // Return default values if no standard found
+        return [
+            'th' => [30, 45],
+            'side' => [30, 45]
+        ];
     }
 
     private function getCountsQuery()
     {
         $start = Carbon::parse($this->start_at);
-        $end = Carbon::parse($this->end_at)->endOfDay();
+        $end = Carbon::parse($this->end_at);
 
         $query = InsDwpCount::select(
                 "ins_dwp_counts.*",
@@ -87,7 +194,35 @@ new #[Layout("layouts.app")] class extends Component {
             $query->where("ins_dwp_counts.mechine", "like", "%" . strtoupper(trim($this->mechine)) . "%");
         }
 
+        if ($this->presstime) {
+            $query->where(function ($q) {
+                $this->applyPressTimeFilter($q);
+            });
+        }
+
         return $query->orderBy("ins_dwp_counts.created_at", "DESC");
+    }
+
+    private function applyPressTimeFilter($query)
+    {
+        switch ($this->presstime) {
+            case '<10':
+                // Duration less than 10 seconds
+                $query->whereRaw("TIME_TO_SEC(duration) < 10");
+                break;
+            case '<13':
+                // Duration less than 13 seconds
+                $query->whereRaw("TIME_TO_SEC(duration) < 13");
+                break;
+            case '13-14':
+                // Duration between 13 and 14 seconds
+                $query->whereRaw("TIME_TO_SEC(duration) BETWEEN 13 AND 14");
+                break;
+            case '>16':
+                // Duration 16 seconds or more
+                $query->whereRaw("TIME_TO_SEC(duration) > 16");
+                break;
+        }
     }
 
     private function getDeviceForLine($line)
@@ -142,6 +277,19 @@ new #[Layout("layouts.app")] class extends Component {
     public function loadMore()
     {
         $this->perPage += 10;
+    }
+
+    /**
+     * Update standards when line or machine filter changes
+     */
+    public function updatedLine()
+    {
+        $this->loadStandards();
+    }
+
+    public function updatedMechine()
+    {
+        $this->loadStandards();
     }
 
     public function download($type)
@@ -319,8 +467,8 @@ new #[Layout("layouts.app")] class extends Component {
                     </div>
                 </div>
                 <div class="flex gap-3">
-                    <x-text-input wire:model.live="start_at" type="date" class="w-40" />
-                    <x-text-input wire:model.live="end_at" type="date" class="w-40" />
+                    <x-text-input wire:model.live="start_at" type="datetime-local" class="w-40" />
+                    <x-text-input wire:model.live="end_at" type="datetime-local" class="w-40" />
                 </div>
             </div>
             <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
@@ -341,6 +489,16 @@ new #[Layout("layouts.app")] class extends Component {
                             <option value="2">2</option>
                             <option value="3">3</option>
                             <option value="4">4</option>
+                    </x-select>
+                </div>
+                <div>
+                    <label class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Press Time") }}</label>
+                    <x-select wire:model.live="presstime" class="w-full lg:w-32">
+                            <option value="">{{ __("All") }}</option>
+                            <option value="<10">{{ __("<10") }}</option>
+                            <option value="<13">{{ __("<13") }}</option>
+                            <option value="13-14">{{ __("13-14") }}</option>
+                            <option value=">16">{{ __(">16") }}</option>
                     </x-select>
                 </div>
             </div>
@@ -421,8 +579,11 @@ new #[Layout("layouts.app")] class extends Component {
                                 $toeHeelValue = $toeHeelArray ? $this->getMedian($toeHeelArray) : null;
                                 $sideValue = $sideArray ? $this->getMedian($sideArray) : null;
 
-                                $toeHeelComparison = $toeHeelValue ? $this->compareWithStandards($toeHeelValue, $this->stdTh) : null;
-                                $sideComparison = $sideValue ? $this->compareWithStandards($sideValue, $this->stdSide) : null;
+                                // Get standards specific to this count's line and machine
+                                $standards = $this->getStandardsForCount($count->line, $count->mechine);
+                                
+                                $toeHeelComparison = $toeHeelValue ? $this->compareWithStandards($toeHeelValue, $standards['th']) : null;
+                                $sideComparison = $sideValue ? $this->compareWithStandards($sideValue, $standards['side']) : null;
                             @endphp
 
                             <tr
@@ -471,7 +632,11 @@ new #[Layout("layouts.app")] class extends Component {
                                     {{ ($count->position ?? '') === 'R' ? 'Right' : 'Left' }}
                                 </td>
                                 <td class="py-3 px-4">
-                                    <span>{{$this->stdTh[0]}} - {{$this->stdTh[1]}}</span>
+                                    <span class="text-xs">
+                                        <span class="text-neutral-500">TH:</span> {{$standards['th'][0]}} - {{$standards['th'][1]}}
+                                        <br>
+                                        <span class="text-neutral-500">S:</span> {{$standards['side'][0]}} - {{$standards['side'][1]}}
+                                    </span>
                                 </td>
                                 <td class="py-3 px-4">
                                     @if($toeHeelValue !== null && $toeHeelComparison !== null)

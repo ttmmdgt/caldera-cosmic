@@ -31,4 +31,13 @@ return [
         ],
     ],
 
+    'modbus' => [
+        'dwp' => [
+            'port' => env('MODBUS_DWP_PORT', 503),
+            'unit_id' => env('MODBUS_DWP_UNIT_ID', 1),
+            'timeout' => env('MODBUS_DWP_TIMEOUT', 3),
+            'value_divisor' => env('MODBUS_DWP_VALUE_DIVISOR', 10), // Divide raw values by this to get decimal
+        ],
+    ],
+
 ];

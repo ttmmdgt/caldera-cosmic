@@ -30,22 +30,14 @@ class InsCtcPoll extends Command
 
     // Configuration
     protected $batch_timeout = 60;        // seconds - same as old clump timeout, def 60
-
     protected $minimum_measurements = 10; // minimum measurements per batch (configurable), def 10
-
     // State management arrays (per machine)
     protected $batch_buffers = [];        // Raw measurement data per machine
-
     protected $last_activity = [];       // Last measurement timestamp per machine
-
     protected $sensor_prev = [];         // Previous sensor readings per machine
-
     protected $recipe_cache = [];        // Cached recipe targets
-
     protected $recipe_id_prev = [];      // Previous recipe ID per machine
-
     protected $st_cl_prev = [];          // Previous system time correction left
-
     protected $st_cr_prev = [];          // Previous system time correction right
 
     /**
@@ -65,7 +57,6 @@ class InsCtcPoll extends Command
         } else {
             $decimal = '0.00';
         }
-
         return (float) $decimal;
     }
 
@@ -88,9 +79,6 @@ class InsCtcPoll extends Command
         return (float) $decimal;
     }
 
-    /**
-     * Get action code from push values
-     */
     public function getActionCode($push_thin, $push_thick)
     {
         if ($push_thin && ! $push_thick) {
@@ -102,26 +90,18 @@ class InsCtcPoll extends Command
         return 0; // No action
     }
 
-    /**
-     * Get recipe target from cache or database
-     */
     public function getRecipeTarget($recipe_id)
     {
         if (! $recipe_id) {
             return null;
         }
-
         if (! isset($this->recipe_cache[$recipe_id])) {
             $recipe = InsCtcRecipe::find($recipe_id);
             $this->recipe_cache[$recipe_id] = $recipe ? $recipe->target : null;
         }
-
         return $this->recipe_cache[$recipe_id];
     }
 
-    /**
-     * Calculate batch statistics
-     */
     public function calculateBatchStatistics($batch_data, $target = null)
     {
         if (empty($batch_data)) {
@@ -234,159 +214,6 @@ class InsCtcPoll extends Command
         ];
     }
 
-    /**
-     * Process completed batch
-     */
-    // public function processBatch($machine_id, $batch_data)
-    // {
-    //     $batch_size = count($batch_data);
-
-    //     if ($batch_size < $this->minimum_measurements) {
-    //         if ($this->option('d')) {
-    //             $this->line("Batch too small ({$batch_size} < {$this->minimum_measurements}), discarding");
-    //         }
-
-    //         return;
-    //     }
-
-    //     $machine = InsCtcMachine::find($machine_id);
-    //     if (! $machine) {
-    //         $this->error("✗ Machine not found: {$machine_id}");
-
-    //         return;
-    //     }
-
-    //     if ($this->option('v')) {
-    //         $this->comment("→ Processing batch: {$machine->name}, {$batch_size} measurements");
-    //     }
-
-    //     // Count recipe occurrences to determine most frequent
-    //     $recipe_counts = [];
-    //     foreach ($batch_data as $record) {
-    //         $recipe_id = $record[6]; // position 6: recipe_id
-    //         $recipe_counts[$recipe_id] = ($recipe_counts[$recipe_id] ?? 0) + 1;
-    //     }
-
-    //     // Get most frequent recipe_id
-    //     arsort($recipe_counts); // Sort by count, descending
-    //     $batch_recipe_id = array_keys($recipe_counts)[0];
-    //     $most_frequent_count = $recipe_counts[$batch_recipe_id];
-    //     $percentage = ($most_frequent_count / $batch_size) * 100;
-
-    //     if ($this->option('v')) {
-    //         $this->comment("→ Batch recipe: {$batch_recipe_id} ({$most_frequent_count}/{$batch_size} = {$percentage}%)");
-    //         if (count($recipe_counts) > 1) {
-    //             $this->comment('→ Recipe distribution: '.json_encode($recipe_counts));
-    //         }
-    //     }
-
-    //     // Calculate statistics using pre-calculated errors (no need for target parameter)
-    //     $stats = $this->calculateBatchStatistics($batch_data);
-
-    //     if (! $stats) {
-    //         $this->error("✗ Failed to calculate statistics for batch (Machine: {$machine->name})");
-
-    //         return;
-    //     }
-
-    //     // Calculate correction uptime percentage
-    //     $correcting_count = 0;
-    //     foreach ($batch_data as $record) {
-    //         if ($record[1]) { // position 1: is_correcting
-    //             $correcting_count++;
-    //         }
-    //     }
-    //     $correction_uptime = $batch_size > 0 ? (int) round(($correcting_count / $batch_size) * 100) : 0;
-
-    //     // Count actual corrections by side
-    //     $correction_left = 0;
-    //     $correction_right = 0;
-    //     foreach ($batch_data as $record) {
-    //         if ($record[2] > 0) {
-    //             $correction_left++;
-    //         }  // action_left > 0
-    //         if ($record[3] > 0) {
-    //             $correction_right++;
-    //         } // action_right > 0
-    //     }
-
-    //     // Calculate correction rate percentage
-    //     $total_corrections = $correction_left + $correction_right;
-    //     $correction_rate = $batch_size > 0 ? (int) round(($total_corrections / ($batch_size * 2)) * 100) : 0;
-
-    //     // Determine is_auto based on correction uptime
-    //     $is_auto = $correction_uptime > 50;
-
-    //     // Debug statistics if requested
-    //     if ($this->option('d')) {
-    //         $this->line('Statistics calculated:');
-    //         $this->table(['Metric', 'Left', 'Right', 'Combined'], [
-    //             ['MAE',
-    //                 $stats['t_mae_left'] !== null ? round($stats['t_mae_left'], 2) : 'null',
-    //                 $stats['t_mae_right'] !== null ? round($stats['t_mae_right'], 2) : 'null',
-    //                 $stats['t_mae'] !== null ? round($stats['t_mae'], 2) : 'null',
-    //             ],
-    //             ['SSD', round($stats['t_ssd_left'], 2), round($stats['t_ssd_right'], 2), round($stats['t_ssd'], 2)],
-    //             ['AVG', round($stats['t_avg_left'], 2), round($stats['t_avg_right'], 2), round($stats['t_avg'], 2)],
-    //             ['Balance', '', '', round($stats['t_balance'], 2)],
-    //             ['Correction Uptime', '', '', $correction_uptime.'%'],
-    //             ['Correction Count', $correction_left, $correction_right, $correction_left + $correction_right],
-    //             ['Correction Rate', '', '', $correction_rate.'%'],
-    //             ['Is Auto', '', '', $is_auto ? 'Yes' : 'No'],
-    //         ]);
-    //     }
-
-    //     // Save batch with most frequent recipe_id
-    //     try {
-    //         $metric = new InsCtcMetric([
-    //             'ins_ctc_machine_id' => $machine_id,
-    //             'ins_rubber_batch_id' => null,
-    //             'ins_ctc_recipe_id' => $batch_recipe_id,
-    //             'is_auto' => $is_auto,
-    //             't_mae_left' => $stats['t_mae_left'] !== null ? round($stats['t_mae_left'], 2) : null,
-    //             't_mae_right' => $stats['t_mae_right'] !== null ? round($stats['t_mae_right'], 2) : null,
-    //             't_mae' => $stats['t_mae'] !== null ? round($stats['t_mae'], 2) : null,
-    //             't_ssd_left' => round($stats['t_ssd_left'], 2),
-    //             't_ssd_right' => round($stats['t_ssd_right'], 2),
-    //             't_ssd' => round($stats['t_ssd'], 2),
-    //             't_avg_left' => round($stats['t_avg_left'], 2),
-    //             't_avg_right' => round($stats['t_avg_right'], 2),
-    //             't_avg' => round($stats['t_avg'], 2),
-    //             't_balance' => round($stats['t_balance'], 2),
-    //             'data' => $batch_data, // Laravel will automatically json_encode this
-    //             'correction_uptime' => $correction_uptime,
-    //             'correction_rate' => $correction_rate,
-    //             'correction_left' => $correction_left,
-    //             'correction_right' => $correction_right,
-    //         ]);
-
-    //         $metric->save();
-
-    //         $this->info("✓ Batch saved: {$machine->name}, {$batch_size} measurements, Recipe {$batch_recipe_id}");
-
-    //         // Debug saved data format if requested
-    //         if ($this->option('d')) {
-    //             $this->line('Sample data saved (first 2 records):');
-    //             $sample_data = array_slice($batch_data, 0, 2);
-    //             foreach ($sample_data as $i => $record) {
-    //                 $this->line("  [{$i}] ".json_encode($record));
-    //             }
-    //         }
-
-    //     } catch (\Exception $e) {
-    //         $this->error("✗ Failed to save batch: {$e->getMessage()}");
-
-    //         // Additional debugging for database errors
-    //         if ($this->option('d')) {
-    //             $this->line('Debug info:');
-    //             $this->line("  Machine ID: {$machine_id}");
-    //             $this->line("  Recipe ID: {$batch_recipe_id}");
-    //             $this->line("  Batch size: {$batch_size}");
-    //             $this->line('  Data type: '.gettype($batch_data));
-    //             $this->line('  Data sample: '.json_encode(array_slice($batch_data, 0, 1)));
-    //         }
-    //     }
-    // }
     public function processBatch($machine_id, $batch_data)
     {
         $batch_size = count($batch_data);
@@ -435,7 +262,6 @@ class InsCtcPoll extends Command
         $recipe_std_max = $recipe ? $recipe->std_max : null;
 
         // 🆕 GET ACTUAL OPERATOR INPUT (dari Modbus)
-        // Ambil dari measurement terakhir (asumsi operator set di awal dan tidak berubah)
         $last_measurement = end($batch_data);
         $actual_std_min = $last_measurement[7] ?? null;  // std_min dari Modbus
         $actual_std_mid = $last_measurement[9] ?? null;  // std_mid dari Modbus  
@@ -474,9 +300,9 @@ class InsCtcPoll extends Command
         }
         $correction_uptime = $batch_size > 0 ? (int) round(($correcting_count / $batch_size) * 100) : 0;
 
-        //===============================================================================================
         // Determine is_auto based on correction uptime (must be done before counting corrections)
-        $is_auto = $correction_uptime > 50;
+        // $is_auto = $correction_uptime > 50;
+        $is_auto = $correction_uptime > 30;
 
         // Count actual corrections by side
     
@@ -503,7 +329,6 @@ class InsCtcPoll extends Command
             if ($this->option('v')) {
                 $this->comment("→ MANUAL MODE: Corrections set to 0 (operator-driven corrections not counted)");
             }
-        //===============================================================================================
         }
 
         // Calculate correction rate percentage

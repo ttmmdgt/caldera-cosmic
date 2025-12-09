@@ -62,17 +62,33 @@ new #[Layout("layouts.app")] class extends Component {
             ];
         }
 
-        if ($view === "raw" || $view === "summary" || $view === "pressure"){
+        if ($view === "raw" || $view === "summary" || $view === "pressure" || $view === "uptime-monitoring"){
             $this->view_titles = [
                 "pressure" => __("Machine Performance"),
                 "raw" => __("Raw Data"),
-                "summary" => __("Summary DWP Pressure")
+                "summary" => __("Summary DWP Pressure"),
+                "uptime-monitoring" => __("Uptime Monitoring"),
             ];
 
             $this->view_icons = [
                 "pressure" => "icon-database",
                 "raw" => "icon-database",
                 "summary" => "icon-notebook-text",
+                "uptime-monitoring" => "icon-activity",
+            ];
+        }
+
+        if ($view === "loadcell" || $view === "raw-loadcell" || $view === "summary-loadcell"){
+            $this->view_titles = [
+                "loadcell" => __("DWP Loadcell"),
+                "raw-loadcell" => __("Raw Data"),
+                "summary-loadcell" => __("Summary Loadcell"),
+            ];
+
+            $this->view_icons = [
+                "loadcell" => "icon-circle-gauge",
+                "raw-loadcell" => "icon-database",
+                "summary-loadcell" => "icon-notebook-text",
             ];
         }
     }
@@ -133,6 +149,18 @@ new #[Layout("layouts.app")] class extends Component {
                 @break
             @case("summary-time-alarm")
                 <livewire:insights.dwp.data.summary-time-alarm />
+                @break
+            @case("loadcell")
+                <livewire:insights.dwp.data.loadcell />
+                @break
+            @case("summary-loadcell")
+                <livewire:insights.dwp.data.summary-loadcell />
+                @break
+            @case("raw-loadcell")
+                <livewire:insights.dwp.data.raw-loadcell />
+                @break
+            @case("uptime-monitoring")
+                <livewire:insights.dwp.data.uptime-monitoring />
                 @break
             @default
                 <div wire:key="no-view" class="w-full py-20">
