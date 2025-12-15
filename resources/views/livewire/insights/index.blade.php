@@ -9,6 +9,7 @@ use App\Models\InsRdcTest;
 use App\Models\InsLdcHide;
 use App\Models\InsClmRecord;
 use App\Models\InsDwpCount;
+use App\Models\InsBpmCount;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 
@@ -24,6 +25,7 @@ new #[Layout("layouts.app")] class extends Component {
     public int $rdc_machines_recent = 0;
     public int $ldc_codes_recent = 0;
     public int $dwp_lines_recent = 0;
+    public int $bpm_lines_recent = 0;
 
     // Climate data properties
     public float|null $temperature_latest = null;
@@ -180,6 +182,16 @@ new #[Layout("layouts.app")] class extends Component {
         $this->getLatestClimateData();
     }
 
+    private function getCachedBpmLines(): int
+    {
+        return Cache::remember("bpm_lines_recent", now()->addMinutes(30), function () {
+            $timeWindow = Carbon::now()->subHours(2);
+            return InsBpmCount::where("updated_at", ">=", $timeWindow)
+                ->distinct("line")
+                ->count("line");
+        });
+    }
+
     #[On("recalculate")]
     public function recalculate()
     {
@@ -301,11 +313,11 @@ new #[Layout("layouts.app")] class extends Component {
                                     <img src="/ink-dwp.svg" class="w-16 h-16 dark:invert" />
                                 </div>
                                 <div class="grow">
-                                    <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan back part mold") }}</div>
+                                    <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan Push Emergency BPM") }}</div>
                                     <div class="flex flex-col gap-y-2 text-neutral-600 dark:text-neutral-400">
                                         <div class="flex items-center gap-x-2 text-xs uppercase text-neutral-500">
-                                            <div class="w-2 h-2 {{ $dwp_lines_recent > 0 ? "bg-green-500" : "bg-red-500" }} rounded-full"></div>
-                                            <div class="">{{ $dwp_lines_recent > 0 ? $dwp_lines_recent . " " . __("line ") : __("luring") }}</div>
+                                            <div class="w-2 h-2 {{ $bpm_lines_recent > 0 ? "bg-green-500" : "bg-red-500" }} rounded-full"></div>
+                                            <div class="">{{ $bpm_lines_recent > 0 ? $bpm_lines_recent . " " . __("line ") : __("luring") }}</div>
                                         </div>
                                     </div>
                                 </div>

@@ -16,7 +16,10 @@ new class extends Component {
     public $dateTo;
     
     #[Url]
-    public $line = 'G1';
+    public $plant = 'G';
+    
+    #[Url]
+    public $line = '1';
     
     public $lastUpdated;
     public $summaryCards = [];
@@ -56,19 +59,27 @@ new class extends Component {
         $this->loadData();
         $this->refreshCharts();
     }
+    
+    public function updatedPlant()
+    {
+        $this->loadData();
+        $this->refreshCharts();
+    }
 
     public function loadData()
     {
         $from = Carbon::parse($this->dateFrom)->startOfDay();
         $to = Carbon::parse($this->dateTo)->endOfDay();
 
-        // Total Emergency for selected line
+        // Total Emergency for selected plant and line
         $totalEmergency = InsBpmCount::whereBetween('created_at', [$from, $to])
+            ->where('plant', $this->plant)
             ->where('line', $this->line)
             ->sum('incremental');
 
-        // Emergency by machine for selected line
+        // Emergency by machine for selected plant and line
         $emergencyByMachine = InsBpmCount::whereBetween('created_at', [$from, $to])
+            ->where('plant', $this->plant)
             ->where('line', $this->line)
             ->select('machine', DB::raw('SUM(incremental) as total'))
             ->groupBy('machine')
@@ -86,7 +97,7 @@ new class extends Component {
         $this->summaryCards = [
             [
                 'label' => 'TOTAL EMERGENCY',
-                'sublabel' => 'Line ' . $this->line . ' - Semua Mesin',
+                'sublabel' => 'Plant ' . $this->plant . ' Line ' . $this->line . ' - Semua Mesin',
                 'value' => $totalEmergency,
                 'color' => 'red',
             ],
@@ -111,11 +122,12 @@ new class extends Component {
         ];
 
         // Emergency by machine data for bar chart
-        $this->emergencyByMachine = $emergencyByMachine->map(function ($item) {
+        $maxTotal = $emergencyByMachine->max('total');
+        $this->emergencyByMachine = $emergencyByMachine->map(function ($item) use ($maxTotal) {
             return [
                 'machine' => $item->machine,
                 'total' => $item->total,
-                'color' => $this->getColorForValue($item->total, $emergencyByMachine->max('total'))
+                'color' => $this->getColorForValue($item->total, $maxTotal)
             ];
         })->toArray();
 
@@ -127,7 +139,7 @@ new class extends Component {
             return [
                 'rank' => $index + 1,
                 'machine' => $item->machine,
-                'line' => $this->line,
+                'line' => $this->plant . $this->line,
                 'counter' => $item->total,
             ];
         })->toArray();
@@ -151,6 +163,7 @@ new class extends Component {
     {
         // Get hourly data
         $hourlyData = InsBpmCount::whereBetween('created_at', [$from, $to])
+            ->where('plant', $this->plant)
             ->where('line', $this->line)
             ->select(
                 'machine',
@@ -175,7 +188,7 @@ new class extends Component {
 
         foreach ($machines as $index => $machine) {
             $machineData = [];
-            for ($hour = 0; $hour < 24; $hour++) {
+            for ($hour = 6; $hour <= 17; $hour++) {
                 $value = $hourlyData->where('machine', $machine)
                     ->where('hour', $hour)
                     ->first();
@@ -192,8 +205,14 @@ new class extends Component {
         }
 
         $this->trendChartData = [
-            'labels' => collect(range(0, 23))->map(fn($h) => $h . ' ' . (strtoupper($h < 12 ? 'AM' : 'PM')))->toArray(),
-            'datasets' => $datasets,
+            'labels' => collect(range(6, 17))->map(fn($h) => sprintf('%02d:00', $h))->toArray(),
+            'datasets' => !empty($datasets) ? $datasets : [[
+                'label' => 'No Data',
+                'data' => array_fill(0, 12, 0),
+                'borderColor' => 'rgba(200, 200, 200, 1)',
+                'backgroundColor' => 'rgba(200, 200, 200, 0.1)',
+                'tension' => 0.4,
+            ]],
         ];
 
         // Calculate trend metrics
@@ -242,6 +261,21 @@ new class extends Component {
 
     private function prepareBarChartData()
     {
+        if (empty($this->emergencyByMachine)) {
+            return [
+                'labels' => [],
+                'datasets' => [
+                    [
+                        'label' => 'Emergency Counter',
+                        'data' => [],
+                        'backgroundColor' => [],
+                        'borderColor' => [],
+                        'borderWidth' => 1,
+                    ]
+                ]
+            ];
+        }
+        
         return [
             'labels' => collect($this->emergencyByMachine)->pluck('machine')->toArray(),
             'datasets' => [
@@ -271,7 +305,28 @@ new class extends Component {
             </div>
             <div>
                 <label class="block text-sm font-medium mb-2">{{ __('LINE') }}</label>
-                <input type="text" wire:model.live="line" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm w-24" placeholder="G1">
+                <select wire:model.live="line" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2">{{ __('PLANT') }}</label>
+                <select wire:model.live="plant" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="D">D</option>
+                    <option value="E">E</option>
+                    <option value="F">F</option>
+                    <option value="G">G</option>
+                    <option value="H">H</option>
+                    <option value="I">I</option>
+                    <option value="J">J</option>
+                </select>
             </div>
         </div>
         <div class="text-sm text-gray-600 dark:text-gray-400">
@@ -302,7 +357,7 @@ new class extends Component {
         {{-- Bar Chart: Emergency Counter by Machine --}}
         <div class="lg:col-span-2 bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
             <div class="mb-4">
-                <h2 class="text-lg font-semibold">{{ __('Emergency Counter - Line') }} {{ $line }}</h2>
+                <h2 class="text-lg font-semibold">{{ __('Emergency Counter - Line') }} {{ $plant }}{{ $line }}</h2>
                 <p class="text-sm text-gray-500">{{ __('SORT') }}</p>
             </div>
             <div class="h-96">
@@ -363,10 +418,10 @@ new class extends Component {
         </div>
     </div>
 
-    {{-- Line Chart: Incremental Emergency Counter (7 AM - 5 PM) --}}
+    {{-- Line Chart: Incremental Emergency Counter (6 AM - 5 PM) --}}
     <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
         <div class="mb-4">
-            <h2 class="text-lg font-semibold">{{ __('Incremental Emergency Counter (7 AM - 5 PM)') }}</h2>
+            <h2 class="text-lg font-semibold">{{ __('Incremental Emergency Counter (6 AM - 5 PM)') }}</h2>
         </div>
         <div class="h-96">
             <canvas id="trendChart" wire:ignore></canvas>
@@ -476,16 +531,26 @@ new class extends Component {
     }
 
     // Listen for refresh event
-    $wire.on('refresh-charts', function(event) {
+    Livewire.on('refresh-charts', (event) => {
         const data = event[0] || event;
         initCharts(data.barChartData, data.trendChartData);
     });
 
-    // Initial load - dispatch after component mounted
-    document.addEventListener('livewire:initialized', function() {
-        setTimeout(function() {
-            $wire.$dispatch('refreshCharts');
-        }, 100);
-    });
+    // Initial load
+    const initializeCharts = () => {
+        const barData = @json($this->prepareBarChartData());
+        const trendData = @json($trendChartData);
+        
+        // Wait for DOM to be ready
+        if (document.getElementById('barChart') && document.getElementById('trendChart')) {
+            initCharts(barData, trendData);
+        } else {
+            // Retry after a short delay if elements not found
+            setTimeout(initializeCharts, 100);
+        }
+    };
+
+    // Run after Livewire component is loaded
+    initializeCharts();
 </script>
 @endscript

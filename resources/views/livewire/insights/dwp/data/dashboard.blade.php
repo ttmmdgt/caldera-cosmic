@@ -455,8 +455,8 @@ new class extends Component {
                 return $item->hour . '_' . $item->line;
             });
 
-        // 4. Define working hours: 7 AM to 4 PM (7:00 to 16:00 inclusive = 10 hours)
-        $workingHours = range(6, 16);
+        // 4. Define working hours:  6 AM to 4 PM (6:00 to 16:00 inclusive = 11 hours)
+        $workingHours = range(6, 17); // 6 to 17 to include 16:00-17:00 hour
 
         $labels = [];
         $datasets = [];

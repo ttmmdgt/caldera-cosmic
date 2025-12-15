@@ -653,7 +653,6 @@ new #[Layout("layouts.app")] class extends Component {
                 <input 
                     type="date" 
                     wire:model.live="start_at" 
-                    wire:change="updatedStartAt"
                     class="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                     max="{{ now()->format('Y-m-d') }}"
                 >
@@ -667,7 +666,6 @@ new #[Layout("layouts.app")] class extends Component {
                 <input 
                     type="date" 
                     wire:model.live="end_at" 
-                    wire:change="updatedEndAt"
                     class="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                     max="{{ now()->format('Y-m-d') }}"
                 >

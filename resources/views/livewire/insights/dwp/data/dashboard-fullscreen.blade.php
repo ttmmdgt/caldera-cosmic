@@ -486,8 +486,8 @@ new #[Layout("layouts.app")] class extends Component {
                 return $item->hour . '_' . $item->line;
             });
 
-        // 4. Define working hours: 7 AM to 4 PM (7:00 to 16:00 inclusive = 10 hours)
-        $workingHours = range(6, 16);
+        // 4. Define working hours: 6 AM to 4 PM (6:00 to 16:00 inclusive = 11 hours)
+        $workingHours = range(6, 17); // 6 to 17 to include 16:00-17:00 hour
 
         $labels = [];
         $datasets = [];
@@ -760,7 +760,7 @@ new #[Layout("layouts.app")] class extends Component {
      */
     /**
      * Calculate online monitoring statistics from LogDwpUptime
-     * ONLY WITHIN WORKING HOURS (07:00 - 17:00)
+     * ONLY WITHIN WORKING HOURS (06:00 - 17:00)
      */
     private function getOnlineMonitoringStats(string $line): array
     {
@@ -782,10 +782,10 @@ new #[Layout("layouts.app")] class extends Component {
         $endDate = $this->end_at ? Carbon::parse($this->end_at)->endOfDay() : Carbon::today()->endOfDay();
         $currentTime = Carbon::now();
         
-        // Query all uptime logs for this device in the date range - ONLY WORKING HOURS (07:00-17:00)
+        // Query all uptime logs for this device in the date range - ONLY WORKING HOURS (06:00-17:00)
         $logs = LogDwpUptime::where('ins_dwp_device_id', $device->id)
             ->whereBetween('logged_at', [$startDate, $endDate])
-            ->whereRaw('HOUR(logged_at) >= 7 AND HOUR(logged_at) < 17')
+            ->whereRaw('HOUR(logged_at) >= 6 AND HOUR(logged_at) < 17')
             ->orderBy('logged_at', 'asc')
             ->get();
 
@@ -799,7 +799,7 @@ new #[Layout("layouts.app")] class extends Component {
             ];
         }
 
-        // === CALCULATE DURATIONS ONLY WITHIN WORKING HOURS (07:00 - 17:00) ===
+        // === CALCULATE DURATIONS ONLY WITHIN WORKING HOURS (06:00 - 17:00) ===
         $onlineDuration = 0;
         $offlineDuration = 0;
         $timeoutDuration = 0;
@@ -828,7 +828,7 @@ new #[Layout("layouts.app")] class extends Component {
             }
             
             // Only count if duration is positive and within working hours
-            if ($duration > 0 && $logTime->hour >= 7 && $logTime->hour < 17) {
+            if ($duration > 0 && $logTime->hour >= 6 && $logTime->hour < 17) {
                 switch ($log->status) {
                     case 'online':
                         $onlineDuration += $duration;
@@ -843,7 +843,7 @@ new #[Layout("layouts.app")] class extends Component {
             }
         }
 
-        // Calculate total tracked duration (maximum 10 hours per day in working hours)
+        // Calculate total tracked duration (maximum 11 hours per day in working hours)
         $totalDuration = $onlineDuration + $offlineDuration + $timeoutDuration;
 
         // Calculate percentages

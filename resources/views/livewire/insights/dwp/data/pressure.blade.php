@@ -617,7 +617,6 @@ new #[Layout("layouts.app")] class extends Component {
                     initOrUpdateChart(performanceData) {
                         const chartEl = this.$refs.chartContainer; // Get element using x-ref
                         if (!chartEl) {
-                            console.error('[ApexChart] Chart container x-ref=\'chartContainer\' not found.');
                             return;
                         }
 
@@ -642,12 +641,10 @@ new #[Layout("layouts.app")] class extends Component {
                             });
 
                         const hasValidData = transformedData.length > 0;
-                        console.log('[ApexChart] Valid transformed data:', transformedData);
 
                         // --- FIX 2: Robust Update Logic ---
                         // Always destroy the old chart instance before creating a new one.
                         if (this.performanceChart) {
-                            console.log('[ApexChart] Destroying old chart before update.');
                             this.performanceChart.destroy();
                         }
 
@@ -691,7 +688,6 @@ new #[Layout("layouts.app")] class extends Component {
                             }
                         };
 
-                        console.log('[ApexChart] Creating new chart instance.');
                         this.performanceChart = new ApexCharts(chartEl, options);
                         this.performanceChart.render();
                     }
@@ -706,21 +702,18 @@ new #[Layout("layouts.app")] class extends Component {
 
                         const performanceData = data?.performanceData;
                         if (!performanceData) {
-                            console.warn('[DWP Dashboard] refresh-performance-chart payload missing expected properties', data);
                             return;
                         }
-                        console.log('Received refresh-performance-chart event with ', performanceData);
 
                         try {
                             // Call our Alpine method
                             initOrUpdateChart(performanceData);
                         } catch (e) {
-                            console.error('[DWP Dashboard] error while initializing/updating ApexChart', e, performanceData);
+                            // Error handling
                         }
                     });
 
                     // Initial load - dispatch the updated event to fetch data and render chart
-                    console.log('[Alpine] Triggering initial data load.');
                     $wire.$dispatch('updated');
                 " >
                 <div id="performanceChart" x-ref="chartContainer" wire:ignore></div>
@@ -738,18 +731,14 @@ new #[Layout("layouts.app")] class extends Component {
                     initOrUpdatePressureSummaryChart(pressureData) {
                         const chartEl = this.$refs.pressureSummaryChartContainer;
                         if (!chartEl) {
-                            console.error('[PressureSummaryChart] Chart container not found.');
                             return;
                         }
 
                         const series = pressureData.series || [];
                         const categories = pressureData.categories || [];
 
-                        console.log('[PressureSummaryChart] Data:', { series, categories });
-
                         // Destroy old chart if exists
                         if (this.pressureSummaryChart) {
-                            console.log('[PressureSummaryChart] Destroying old chart.');
                             this.pressureSummaryChart.destroy();
                         }
 
@@ -816,7 +805,6 @@ new #[Layout("layouts.app")] class extends Component {
                             colors: series.map(s => s.color)
                         };
 
-                        console.log('[PressureSummaryChart] Creating new chart.');
                         this.pressureSummaryChart = new ApexCharts(chartEl, options);
                         this.pressureSummaryChart.render();
                     }
@@ -830,19 +818,15 @@ new #[Layout("layouts.app")] class extends Component {
 
                         const pressureData = data?.pressureData;
                         if (!pressureData) {
-                            console.warn('[PressureSummaryChart] Missing pressureData in payload', data);
                             return;
                         }
-                        console.log('[PressureSummaryChart] Received data:', pressureData);
 
                         try {
                             initOrUpdatePressureSummaryChart(pressureData);
                         } catch (e) {
-                            console.error('[PressureSummaryChart] Error:', e);
+                            // Error handling
                         }
                     });
-
-                    console.log('[PressureSummaryChart] Waiting for data...');
                 "
             >
                 <div x-ref="pressureSummaryChartContainer" wire:ignore></div>
@@ -857,7 +841,6 @@ new #[Layout("layouts.app")] class extends Component {
                     initOrUpdatePressurePieChart(pressureData) {
                         const chartEl = this.$refs.pressurePieChartContainer;
                         if (!chartEl) {
-                            console.error('[PressurePieChart] Chart container not found.');
                             return;
                         }
 
@@ -878,11 +861,8 @@ new #[Layout("layouts.app")] class extends Component {
                         const values = Object.values(categoryTotals);
                         const colors = labels.map(label => categoryColors[label]);
 
-                        console.log('[PressurePieChart] Data:', { labels, values, colors });
-
                         // Destroy old chart if exists
                         if (this.pressurePieChart) {
-                            console.log('[PressurePieChart] Destroying old chart.');
                             this.pressurePieChart.destroy();
                         }
 
@@ -932,7 +912,6 @@ new #[Layout("layouts.app")] class extends Component {
                             }]
                         };
 
-                        console.log('[PressurePieChart] Creating new chart.');
                         this.pressurePieChart = new ApexCharts(chartEl, options);
                         this.pressurePieChart.render();
                     }
@@ -946,19 +925,15 @@ new #[Layout("layouts.app")] class extends Component {
 
                         const pressureData = data?.pressureData;
                         if (!pressureData) {
-                            console.warn('[PressurePieChart] Missing pressureData in payload', data);
                             return;
                         }
-                        console.log('[PressurePieChart] Received data:', pressureData);
 
                         try {
                             initOrUpdatePressurePieChart(pressureData);
                         } catch (e) {
-                            console.error('[PressurePieChart] Error:', e);
+                            // Error handling
                         }
                     });
-
-                    console.log('[PressurePieChart] Waiting for data...');
                 "
             >
                 <div x-ref="pressurePieChartContainer" wire:ignore></div>
@@ -975,7 +950,6 @@ new #[Layout("layouts.app")] class extends Component {
                     initOrUpdatePieChart(durationData) {
                         const chartEl = this.$refs.pieChartContainer;
                         if (!chartEl) {
-                            console.error('[PieChart] Chart container not found.');
                             return;
                         }
 
@@ -996,11 +970,8 @@ new #[Layout("layouts.app")] class extends Component {
                         const values = Object.values(categoryTotals);
                         const colors = labels.map(label => categoryColors[label]);
 
-                        console.log('[PieChart] Data:', { labels, values, colors });
-
                         // Destroy old chart if exists
                         if (this.pieChart) {
-                            console.log('[PieChart] Destroying old chart.');
                             this.pieChart.destroy();
                         }
 
@@ -1050,7 +1021,6 @@ new #[Layout("layouts.app")] class extends Component {
                             }]
                         };
 
-                        console.log('[PieChart] Creating new chart.');
                         this.pieChart = new ApexCharts(chartEl, options);
                         this.pieChart.render();
                     }
@@ -1064,19 +1034,15 @@ new #[Layout("layouts.app")] class extends Component {
 
                         const durationData = data?.durationData;
                         if (!durationData) {
-                            console.warn('[PieChart] Missing durationData in payload', data);
                             return;
                         }
-                        console.log('[PieChart] Received data:', durationData);
 
                         try {
                             initOrUpdatePieChart(durationData);
                         } catch (e) {
-                            console.error('[PieChart] Error:', e);
+                            // Error handling
                         }
                     });
-
-                    console.log('[PieChart] Waiting for data...');
                 "
             >
                 <div x-ref="pieChartContainer" wire:ignore></div>
@@ -1091,18 +1057,14 @@ new #[Layout("layouts.app")] class extends Component {
                     initOrUpdateDurationChart(durationData) {
                         const chartEl = this.$refs.durationChartContainer;
                         if (!chartEl) {
-                            console.error('[DurationChart] Chart container not found.');
                             return;
                         }
 
                         const series = durationData.series || [];
                         const categories = durationData.categories || [];
 
-                        console.log('[DurationChart] Data:', { series, categories });
-
                         // Destroy old chart if exists
                         if (this.durationChart) {
-                            console.log('[DurationChart] Destroying old chart.');
                             this.durationChart.destroy();
                         }
 
@@ -1169,7 +1131,6 @@ new #[Layout("layouts.app")] class extends Component {
                             colors: series.map(s => s.color)
                         };
 
-                        console.log('[DurationChart] Creating new chart.');
                         this.durationChart = new ApexCharts(chartEl, options);
                         this.durationChart.render();
                     }
@@ -1183,19 +1144,15 @@ new #[Layout("layouts.app")] class extends Component {
 
                         const durationData = data?.durationData;
                         if (!durationData) {
-                            console.warn('[DurationChart] Missing durationData in payload', data);
                             return;
                         }
-                        console.log('[DurationChart] Received data:', durationData);
 
                         try {
                             initOrUpdateDurationChart(durationData);
                         } catch (e) {
-                            console.error('[DurationChart] Error:', e);
+                            // Error handling
                         }
                     });
-
-                    console.log('[DurationChart] Waiting for data...');
                 "
             >
                 <div x-ref="durationChartContainer" wire:ignore></div>
