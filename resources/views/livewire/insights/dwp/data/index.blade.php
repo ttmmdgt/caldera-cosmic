@@ -66,14 +66,12 @@ new #[Layout("layouts.app")] class extends Component {
             $this->view_titles = [
                 "pressure" => __("Machine Performance"),
                 "raw" => __("Raw Data"),
-                "summary" => __("Summary DWP Pressure"),
                 "uptime-monitoring" => __("Uptime Monitoring"),
             ];
 
             $this->view_icons = [
                 "pressure" => "icon-database",
                 "raw" => "icon-database",
-                "summary" => "icon-notebook-text",
                 "uptime-monitoring" => "icon-activity",
             ];
         }

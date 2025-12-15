@@ -196,8 +196,8 @@ new #[Layout("layouts.app")] class extends Component {
 
 ?>
 
-<x-slot name="title">{{ __("Wawasan") }}</x-slot>
 <div wire:poll.900s id="content" class="py-12 text-neutral-800 dark:text-neutral-200">
+    <x-slot name="title">{{ __("Wawasan") }}</x-slot>
     <div class="max-w-5xl mx-auto sm:px-6 lg:px-8">
         <div class="relative text-neutral h-32 sm:rounded-lg overflow-hidden mb-12">
             <img class="dark:invert absolute top-0 left-0 w-full h-full object-cover opacity-70" src="/insight-banner.jpg" />
@@ -282,6 +282,26 @@ new #[Layout("layouts.app")] class extends Component {
                                 </div>
                                 <div class="grow">
                                     <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan deep well press") }}</div>
+                                    <div class="flex flex-col gap-y-2 text-neutral-600 dark:text-neutral-400">
+                                        <div class="flex items-center gap-x-2 text-xs uppercase text-neutral-500">
+                                            <div class="w-2 h-2 {{ $dwp_lines_recent > 0 ? "bg-green-500" : "bg-red-500" }} rounded-full"></div>
+                                            <div class="">{{ $dwp_lines_recent > 0 ? $dwp_lines_recent . " " . __("line ") : __("luring") }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="px-6 py-3 text-lg">
+                                    <i class="icon-chevron-right"></i>
+                                </div>
+                            </div>
+                        </a>
+
+                        <a href="{{ route("insights.bpm.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                            <div class="flex items-center">
+                                <div class="px-6 py-3">
+                                    <img src="/ink-dwp.svg" class="w-16 h-16 dark:invert" />
+                                </div>
+                                <div class="grow">
+                                    <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan back part mold") }}</div>
                                     <div class="flex flex-col gap-y-2 text-neutral-600 dark:text-neutral-400">
                                         <div class="flex items-center gap-x-2 text-xs uppercase text-neutral-500">
                                             <div class="w-2 h-2 {{ $dwp_lines_recent > 0 ? "bg-green-500" : "bg-red-500" }} rounded-full"></div>

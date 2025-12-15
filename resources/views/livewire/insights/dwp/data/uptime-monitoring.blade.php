@@ -133,9 +133,15 @@ new #[Layout("layouts.app")] class extends Component {
                 if ($nextLog) {
                     $nextLogTime = Carbon::parse($nextLog->logged_at);
                 } else {
-                    // If this is the last log, calculate until now or end of working hours (17:00)
-                    $endOfWorkingHours = Carbon::parse($log->logged_at)->setTime(17, 0, 0);
-                    $nextLogTime = $currentTime->lt($endOfWorkingHours) ? $currentTime : $endOfWorkingHours;
+                    // If this is the last log, only extend to current time if status is 'online'
+                    // For offline/timeout, don't extend duration (device is disconnected)
+                    if ($log->status === 'online') {
+                        $endOfWorkingHours = Carbon::parse($log->logged_at)->setTime(17, 0, 0);
+                        $nextLogTime = $currentTime->lt($endOfWorkingHours) ? $currentTime : $endOfWorkingHours;
+                    } else {
+                        // For offline/timeout as last log, no duration extension
+                        continue;
+                    }
                 }
                 
                 // Calculate duration only within working hours
@@ -249,9 +255,15 @@ new #[Layout("layouts.app")] class extends Component {
                 if ($nextLog) {
                     $nextLogTime = Carbon::parse($nextLog->logged_at);
                 } else {
-                    // If this is the last log, calculate until now or end of working hours (17:00)
-                    $endOfWorkingHours = Carbon::parse($log->logged_at)->setTime(17, 0, 0);
-                    $nextLogTime = $currentTime->lt($endOfWorkingHours) ? $currentTime : $endOfWorkingHours;
+                    // If this is the last log, only extend to current time if status is 'online'
+                    // For offline/timeout, don't extend duration (device is disconnected)
+                    if ($log->status === 'online') {
+                        $endOfWorkingHours = Carbon::parse($log->logged_at)->setTime(17, 0, 0);
+                        $nextLogTime = $currentTime->lt($endOfWorkingHours) ? $currentTime : $endOfWorkingHours;
+                    } else {
+                        // For offline/timeout as last log, no duration extension
+                        continue;
+                    }
                 }
                 
                 // Calculate duration only within working hours
@@ -792,88 +804,6 @@ new #[Layout("layouts.app")] class extends Component {
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- Device Statistics Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        @forelse($deviceStats as $stat)
-            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 border-l-4 
-                {{ $stat['current_status'] === 'online' ? 'border-green-500' : 
-                   ($stat['current_status'] === 'timeout' ? 'border-yellow-500' : 'border-red-500') }}">
-                
-                <!-- Device Header -->
-                <div class="flex items-start justify-between mb-4">
-                    <div>
-                        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-                            {{ $stat['device']->name }}
-                        </h3>
-                        <p class="text-sm text-gray-600 dark:text-gray-400">
-                            {{ $stat['device']->ip_address }}
-                        </p>
-                    </div>
-                    <span class="px-3 py-1 rounded-full text-xs font-semibold
-                        {{ $stat['current_status'] === 'online' ? 'bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100' : 
-                           ($stat['current_status'] === 'timeout' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100' : 
-                            'bg-red-100 text-red-800 dark:bg-red-800 dark:text-red-100') }}">
-                        {{ strtoupper($stat['current_status']) }}
-                    </span>
-                </div>
-
-                <!-- Uptime Progress -->
-                <div class="mb-4">
-                    <div class="flex justify-between text-sm mb-1">
-                        <span class="text-gray-600 dark:text-gray-400">{{ __('Uptime') }}</span>
-                        <span class="font-semibold text-gray-900 dark:text-white">{{ $stat['uptime_percentage'] }}%</span>
-                    </div>
-                    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                        <div class="h-2 rounded-full transition-all {{ $stat['uptime_percentage'] >= 95 ? 'bg-green-500' : ($stat['uptime_percentage'] >= 80 ? 'bg-yellow-500' : 'bg-red-500') }}" 
-                             style="width: {{ $stat['uptime_percentage'] }}%"></div>
-                    </div>
-                </div>
-
-                <!-- Stats Grid -->
-                <div class="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                        <p class="text-xs text-gray-600 dark:text-gray-400">{{ __('Online') }}</p>
-                        <p class="text-lg font-semibold text-green-600 dark:text-green-400">{{ $stat['online_count'] }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs text-gray-600 dark:text-gray-400">{{ __('Offline') }}</p>
-                        <p class="text-lg font-semibold text-red-600 dark:text-red-400">{{ $stat['offline_count'] }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs text-gray-600 dark:text-gray-400">{{ __('Timeout (RTO)') }}</p>
-                        <p class="text-lg font-semibold text-yellow-600 dark:text-yellow-400">{{ $stat['timeout_count'] }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs text-gray-600 dark:text-gray-400">{{ __('Total Logs') }}</p>
-                        <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ $stat['total_logs'] }}</p>
-                    </div>
-                </div>
-
-                <!-- Additional Info -->
-                <div class="space-y-2 text-sm border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <div class="flex justify-between">
-                        <span class="text-gray-600 dark:text-gray-400">{{ __('Avg Response Time') }}</span>
-                        <span class="font-medium text-gray-900 dark:text-white">{{ $stat['avg_response_time'] }}s</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600 dark:text-gray-400">{{ __('Longest Downtime') }}</span>
-                        <span class="font-medium text-gray-900 dark:text-white">{{ gmdate('H:i:s', $stat['longest_downtime']) }}</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600 dark:text-gray-400">{{ __('Last Update') }}</span>
-                        <span class="font-medium text-gray-900 dark:text-white">
-                            {{ $stat['last_logged_at'] ? $stat['last_logged_at']->diffForHumans() : 'N/A' }}
-                        </span>
-                    </div>
-                </div>
-            </div>
-        @empty
-            <div class="col-span-3 text-center py-12 text-gray-500 dark:text-gray-400">
-                {{ __('No device data available') }}
-            </div>
-        @endforelse
     </div>
 
     <!-- Detailed Logs Table -->

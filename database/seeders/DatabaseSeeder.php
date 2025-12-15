@@ -24,7 +24,8 @@ class DatabaseSeeder extends Seeder
             $this->call([
                 InsDwpDeviceSeeder::class,
                 InsDwpCountSeeder::class,
-                InsDwpTimeAlarmCountSeeder::class
+                InsDwpTimeAlarmCountSeeder::class,
+                InsBpmCountSeeder::class, // BPM (Button Push Monitor) seeder
             ]);
         }
     }

@@ -24,6 +24,9 @@ new #[Layout("layouts.app")] class extends Component {
     #[Url]
     public string $line = "";
 
+    #[Url]
+    public string $timeView = "daily"; // daily or weekly
+
     public $view = "summary-time-alarm";
 
     public array $devices = [];
@@ -32,6 +35,12 @@ new #[Layout("layouts.app")] class extends Component {
     public array $dailyChartData = [];
     public array $count = [];
     public array $cumulativeData = [];
+    public $peakHourOrDay = null;
+    public $peakCount = 0;
+    public $averagePerPeriod = 0;
+    public $longestQueueTime = 0;
+    public $topLine = null;
+    public $topLineCount = 0;
 
     public function mount()
     {
@@ -48,6 +57,9 @@ new #[Layout("layouts.app")] class extends Component {
         
         // update menu
         $this->dispatch("update-menu", $this->view);
+        
+        // Initial data load
+        $this->update();
     }
 
     private function getCountsQuery()
@@ -83,6 +95,103 @@ new #[Layout("layouts.app")] class extends Component {
             "total_incremental" => $counts->sum('incremental'),
             "avg_incremental_per_line" => $lines->count() > 0 ? round($counts->sum('incremental') / $lines->count(), 2) : 0,
         ];
+        
+        // Calculate peak hour/day
+        $this->calculatePeakTime();
+        
+        // Calculate average per period
+        $this->calculateAveragePerPeriod();
+        
+        // Get longest queue time
+        $this->getLongestQueueTime();
+        
+        // Get top line
+        $this->getTopLine();
+    }
+    
+    private function calculatePeakTime()
+    {
+        $counts = $this->getCountsQuery()->get();
+        
+        if ($this->timeView === 'daily') {
+            // Group by hour
+            $hourlyData = $counts->groupBy(function($item) {
+                return Carbon::parse($item->created_at)->format('H');
+            })->map(function($items) {
+                return $items->sum('incremental');
+            })->sortDesc();
+            
+            if ($hourlyData->isNotEmpty()) {
+                $this->peakHourOrDay = $hourlyData->keys()->first() . ':00';
+                $this->peakCount = $hourlyData->first();
+            }
+        } else {
+            // Group by date
+            $dailyData = $counts->groupBy(function($item) {
+                return Carbon::parse($item->created_at)->format('Y-m-d');
+            })->map(function($items) {
+                return $items->sum('incremental');
+            })->sortDesc();
+            
+            if ($dailyData->isNotEmpty()) {
+                $this->peakHourOrDay = Carbon::parse($dailyData->keys()->first())->format('d M Y');
+                $this->peakCount = $dailyData->first();
+            }
+        }
+    }
+    
+    private function calculateAveragePerPeriod()
+    {
+        $counts = $this->getCountsQuery()->get();
+        
+        if ($this->timeView === 'daily') {
+            // Average per hour (6:00 - 17:00 = 12 hours)
+            $hourlyData = $counts->groupBy(function($item) {
+                return Carbon::parse($item->created_at)->format('H');
+            })->map(function($items) {
+                return $items->sum('incremental');
+            });
+            
+            $totalHours = 12; // 6:00 to 17:00
+            $this->averagePerPeriod = $hourlyData->count() > 0 ? round($counts->sum('incremental') / $totalHours, 2) : 0;
+        } else {
+            // Average per day
+            $start = Carbon::parse($this->start_at);
+            $end = Carbon::parse($this->end_at);
+            $totalDays = $start->diffInDays($end) + 1;
+            
+            $this->averagePerPeriod = $totalDays > 0 ? round($counts->sum('incremental') / $totalDays, 2) : 0;
+        }
+    }
+    
+    private function getLongestQueueTime()
+    {
+        $longDurationData = InsDwpTimeAlarmCount::orderBy('duration', 'desc')
+            ->whereBetween('created_at', [
+                Carbon::parse($this->start_at)->startOfDay(),
+                Carbon::parse($this->end_at)->endOfDay()
+            ]);
+            
+        if ($this->line) {
+            $longDurationData->where("line", "like", "%" . strtoupper(trim($this->line)) . "%");
+        }
+        
+        $result = $longDurationData->first();
+        $this->longestQueueTime = $result ? $result->duration : 0;
+    }
+    
+    private function getTopLine()
+    {
+        $counts = $this->getCountsQuery()->get();
+        
+        $lineSummary = $counts->groupBy('line')->map(function ($lineCounts) {
+            return $lineCounts->sum('incremental');
+        })->sortDesc();
+        
+        if ($lineSummary->isNotEmpty()) {
+            $this->topLine = $lineSummary->keys()->first();
+            $this->topLineCount = $lineSummary->first();
+        }
     }
 
     private function generateLineChartData()
@@ -116,46 +225,88 @@ new #[Layout("layouts.app")] class extends Component {
         $dates = [];
         $datasets = [];
 
-        // Generate all dates in range
-        $current = $start->copy();
-        while ($current <= $end) {
-            $dates[] = $current->format('Y-m-d');
-            $current->addDay();
-        }
-
-        // Color palette for different lines
-        $colors = [
-            'rgba(59, 130, 246, 0.6)',   // Blue
-            'rgba(16, 185, 129, 0.6)',   // Green  
-            'rgba(245, 101, 101, 0.6)',  // Red
-            'rgba(251, 191, 36, 0.6)',   // Yellow
-            'rgba(139, 92, 246, 0.6)',   // Purple
-            'rgba(236, 72, 153, 0.6)',   // Pink
-        ];
-
-        foreach ($lines as $index => $line) {
-            $lineData = [];
-            
-            foreach ($dates as $date) {
-                $dailyCount = $this->getCountsQuery()
-                    ->where('line', $line)
-                    ->whereDate('created_at', $date)
-                    ->sum('incremental');
-                
-                $lineData[] = $dailyCount;
+        if ($this->timeView === 'weekly') {
+            // Weekly view - group by date
+            $current = $start->copy();
+            while ($current <= $end) {
+                $dates[] = $current->format('Y-m-d');
+                $current->addDay();
             }
 
-            $color = $colors[$index % count($colors)];
-            $borderColor = str_replace('0.6', '1', $color);
-
-            $datasets[] = [
-                'label' => $line,
-                'data' => $lineData,
-                'backgroundColor' => $color,
-                'borderColor' => $borderColor,
-                'borderWidth' => 2,
-                'tension' => 0.4,
+            // Color palette for different lines
+            $colors = [
+                'rgba(59, 130, 246, 0.6)',   // Blue
+                'rgba(16, 185, 129, 0.6)',   // Green  
+                'rgba(245, 101, 101, 0.6)',  // Red
+                'rgba(251, 191, 36, 0.6)',   // Yellow
+                'rgba(139, 92, 246, 0.6)',   // Purple
+                'rgba(236, 72, 153, 0.6)',   // Pink
             ];
+
+            foreach ($lines as $index => $line) {
+                $lineData = [];
+                
+                foreach ($dates as $date) {
+                    $dailyCount = $this->getCountsQuery()
+                        ->where('line', $line)
+                        ->whereDate('created_at', $date)
+                        ->sum('incremental');
+                    
+                    $lineData[] = $dailyCount;
+                }
+
+                $color = $colors[$index % count($colors)];
+                $borderColor = str_replace('0.6', '1', $color);
+
+                $datasets[] = [
+                    'label' => $line,
+                    'data' => $lineData,
+                    'backgroundColor' => $color,
+                    'borderColor' => $borderColor,
+                    'borderWidth' => 2,
+                    'tension' => 0.4,
+                ];
+            }
+        } else {
+            // Daily view - group by hour (6:00 to 17:00)
+            for ($hour = 6; $hour <= 17; $hour++) {
+                $dates[] = sprintf('%02d:00', $hour);
+            }
+
+            // Color palette for different lines
+            $colors = [
+                'rgba(59, 130, 246, 0.6)',   // Blue
+                'rgba(16, 185, 129, 0.6)',   // Green  
+                'rgba(245, 101, 101, 0.6)',  // Red
+                'rgba(251, 191, 36, 0.6)',   // Yellow
+                'rgba(139, 92, 246, 0.6)',   // Purple
+                'rgba(236, 72, 153, 0.6)',   // Pink
+            ];
+
+            foreach ($lines as $index => $line) {
+                $lineData = [];
+                
+                foreach (range(6, 17) as $hour) {
+                    $hourlyCount = $this->getCountsQuery()
+                        ->where('line', $line)
+                        ->whereRaw('HOUR(created_at) = ?', [$hour])
+                        ->sum('incremental');
+                    
+                    $lineData[] = $hourlyCount;
+                }
+
+                $color = $colors[$index % count($colors)];
+                $borderColor = str_replace('0.6', '1', $color);
+
+                $datasets[] = [
+                    'label' => $line,
+                    'data' => $lineData,
+                    'backgroundColor' => $color,
+                    'borderColor' => $borderColor,
+                    'borderWidth' => 2,
+                    'tension' => 0.4,
+                ];
+            }
         }
 
         $this->dailyChartData = [
@@ -241,6 +392,26 @@ new #[Layout("layouts.app")] class extends Component {
     {
         $this->update();
     }
+    
+    public function updatedTimeView()
+    {
+        $this->update();
+    }
+    
+    public function updatedLine()
+    {
+        $this->update();
+    }
+    
+    public function updatedStartAt()
+    {
+        $this->update();
+    }
+    
+    public function updatedEndAt()
+    {
+        $this->update();
+    }
 };
 
 ?>
@@ -305,6 +476,15 @@ new #[Layout("layouts.app")] class extends Component {
                 </div>
             </div>
             <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
+            <div class="grid grid-cols-2 lg:flex gap-3">
+                <div class="mt-6">
+                    <x-select wire:model.live="timeView" class="w-full lg:w-32">
+                        <option value="daily">{{ __("Daily") }}</option>
+                        <option value="weekly">{{ __("Weekly") }}</option>
+                    </x-select>
+                </div>
+            </div>
+            <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
             <div class="grow flex justify-center gap-x-2 items-center">
                 <div wire:loading.class.remove="hidden" class="flex gap-3 hidden">
                     <div class="relative w-3">
@@ -318,46 +498,99 @@ new #[Layout("layouts.app")] class extends Component {
         </div>
     </div>
 
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <!-- Peak Hour/Day Card -->
+        <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <div class="flex flex-col">
+                <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">
+                    @if($timeView === 'daily')
+                        {{ __("Peak Hour") }}
+                    @else
+                        {{ __("Peak Day") }}
+                    @endif
+                </p>
+                @if($timeView === 'daily')
+                    <p class="text-4xl font-bold text-blue-600 dark:text-blue-400">
+                        {{ $peakHourOrDay ?? 'N/A' }}
+                    </p>
+                @else
+                    <p class="text-3xl font-bold text-blue-600 dark:text-blue-400 leading-tight">
+                        {{ $peakHourOrDay ?? 'N/A' }}
+                    </p>
+                @endif
+                <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-2">
+                    {{ number_format($peakCount) }} {{ __("alarms") }}
+                </p>
+            </div>
+        </div>
+
+        <!-- Average Per Period Card -->
+        <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <div class="flex flex-col">
+                <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">
+                    @if($timeView === 'daily')
+                        {{ __("Avg Per Hour") }}
+                    @else
+                        {{ __("Avg Per Day") }}
+                    @endif
+                </p>
+                <p class="text-4xl font-bold text-green-600 dark:text-green-400">
+                    {{ number_format($averagePerPeriod, 2) }}
+                </p>
+                <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-2">
+                    {{ __("average alarms") }}
+                </p>
+            </div>
+        </div>
+
+        <!-- Long Queue Time Card -->
+        <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <div class="flex flex-col">
+                <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">
+                    {{ __("Long Queue Time") }}
+                </p>
+                <p class="text-4xl font-bold text-orange-600 dark:text-orange-400">
+                    {{ $longestQueueTime }} <span class="text-xl">sec</span>
+                </p>
+                <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-2">
+                    {{ __("maximum duration") }}
+                </p>
+            </div>
+        </div>
+
+        <!-- Top Line Card -->
+        <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <div class="flex flex-col">
+                <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">
+                    {{ __("Top Line") }}
+                </p>
+                <p class="text-4xl font-bold text-purple-600 dark:text-purple-400">
+                    {{ $topLine ?? 'N/A' }}
+                </p>
+                <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-2">
+                    {{ number_format($topLineCount) }} {{ __("alarms") }}
+                </p>
+            </div>
+        </div>
+    </div>
+
     <!-- Charts Grid -->
     <div class="grid grid-cols- lg:grid-cols-1 gap-6">
         <!-- Daily Trend Chart -->
         <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
             <h3 class="text-lg font-medium text-neutral-900 dark:text-neutral-100 mb-4">
-                {{ __("Daily Trends") }}
+                @if($timeView === 'daily')
+                    {{ __("Hourly Trends") }}
+                @else
+                    {{ __("Daily Trends") }}
+                @endif
             </h3>
             <div class="h-96">
                 <canvas id="dailyChart" wire:ignore></canvas>
             </div>
         </div>
     </div>
-
-    <!-- table -->
-     <div key="raw-counts" class="mt-5 overflow-x-auto overflow-y-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
-            <div class="min-w-full bg-white dark:bg-neutral-800 shadow-sm">
-                <table class="min-w-full text-sm text-neutral-600 dark:text-neutral-400">
-                    <thead class="sticky top-0 z-10 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
-                        <tr class="uppercase text-xs text-left">
-                            <th class="py-3 px-4 font-medium">Line</th>
-                            <th class="py-3 px-4 font-medium">Machine</th>
-                            <th class="py-3 px-4 font-medium text-right">Count</th>
-                            <th class="py-3 px-4 font-medium">Timestamp</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach($this->cumulativeData as $cumulative)
-                            <tr
-                                wire:key="count-tr-{{$cumulative['id']}}"
-                                tabindex="0"
-                                class="hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors cursor-pointer border-b border-neutral-100 dark:border-neutral-700/50"
-                            >
-                                <td class="py-3 px-4"></td>
-                                <td class="py-3 px-4"></td>
-                            </tr>
-                        @endforeach
-                    </tbody>
-                </table>
-            </div>
-        </div>
 </div>
 
 @script

@@ -139,7 +139,6 @@ new #[Layout("layouts.app")] class extends Component {
 
         // --- Step 3 (FIXED): Get all recent records for a correct average calculation ---
         $recentRecordsQuery = InsDwpCount::whereIn('mechine', $machineNames)
-            ->where('created_at', '>=', now()->subDay())
             ->select('mechine', 'pv', 'duration', 'position');
 
         // Apply date range filter to relevant queries
@@ -148,6 +147,10 @@ new #[Layout("layouts.app")] class extends Component {
             $end = Carbon::parse($this->end_at)->endOfDay();
             $latestCountsQuery->whereBetween('created_at', [$start, $end]);
             $outputsQuery->whereBetween('created_at', [$start, $end]);
+            $recentRecordsQuery->whereBetween('created_at', [$start, $end]);
+        } else {
+            // Default to last 24 hours if no date range specified
+            $recentRecordsQuery->where('created_at', '>=', now()->subDay());
         }
 
         // Execute the queries
@@ -216,13 +219,14 @@ new #[Layout("layouts.app")] class extends Component {
             $pressTimeCount = 0;
             if (isset($recentRecords[$machineName])) {
                 foreach ($recentRecords[$machineName] as $record) {
-                    if (isset($record->duration)) {
+                    // Only count valid duration values (greater than 0)
+                    if (isset($record->duration) && is_numeric($record->duration) && $record->duration > 0) {
                         $avgPressTime += $record->duration;
                         $pressTimeCount++;
                     }
                 }
             }
-            $avgPressTime = $pressTimeCount > 0 ? round($avgPressTime / $pressTimeCount) : 16;
+            $avgPressTime = $pressTimeCount > 0 ? round($avgPressTime / $pressTimeCount, 0) : 16;
 
             $statuses = [
                 'leftToeHeel'  => $this->getStatus($leftData['toeHeel']),
@@ -483,7 +487,7 @@ new #[Layout("layouts.app")] class extends Component {
             });
 
         // 4. Define working hours: 7 AM to 4 PM (7:00 to 16:00 inclusive = 10 hours)
-        $workingHours = range(7, 16);
+        $workingHours = range(6, 16);
 
         $labels = [];
         $datasets = [];
