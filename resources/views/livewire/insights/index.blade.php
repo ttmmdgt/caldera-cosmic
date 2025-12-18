@@ -177,6 +177,7 @@ new #[Layout("layouts.app")] class extends Component {
         $this->rdc_machines_recent = $this->getCachedRdcMachines();
         $this->ldc_codes_recent = $this->getCachedLdcCodes();
         $this->dwp_lines_recent = $this->getCachedDwpLines();
+        $this->bpm_lines_recent = $this->getCachedBpmLines();
 
         // Get fresh climate data (no caching)
         $this->getLatestClimateData();
@@ -198,10 +199,11 @@ new #[Layout("layouts.app")] class extends Component {
         Cache::forget("stc_machines_count");
         Cache::forget("stc_d_sums_recent");
         Cache::forget("omv_lines_recent");
-        Cache::forget("ctc_lines_recent"); // New CTC cache clear
+        Cache::forget("ctc_lines_recent");
         Cache::forget("rdc_machines_recent");
         Cache::forget("ldc_codes_recent");
         Cache::forget("dwp_lines_recent");
+        Cache::forget("bpm_lines_recent");
         $this->calculateMetrics();
     }
 };
@@ -244,7 +246,7 @@ new #[Layout("layouts.app")] class extends Component {
                                 </div>
                             </div>
                         </a>
-                        <a href="{{ route("insights.ctc.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                        <a href="{{ route('insights.ctc.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
                             <div class="flex items-center">
                                 <div class="px-6 py-3">
                                     <img src="/ink-rtc.svg" class="w-16 h-16 dark:invert" />
@@ -263,7 +265,7 @@ new #[Layout("layouts.app")] class extends Component {
                                 </div>
                             </div>
                         </a>
-                        <a href="{{ route("insights.rdc.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                        <a href="{{ route('insights.rdc.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
                             <div class="flex items-center">
                                 <div class="px-6 py-3">
                                     <img src="/ink-rdc.svg" class="w-16 h-16 dark:invert" />
@@ -287,7 +289,7 @@ new #[Layout("layouts.app")] class extends Component {
                 <div>
                     <h1 class="uppercase text-sm text-neutral-500 mb-4 px-8">{{ __("Sistem area assembly") }}</h1>
                     <div class="bg-white dark:bg-neutral-800 shadow overflow-hidden sm:rounded-lg divide-y divide-neutral-200 dark:text-white dark:divide-neutral-700">
-                        <a href="{{ route("insights.dwp.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                        <a href="{{ route('insights.dwp.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
                             <div class="flex items-center">
                                 <div class="px-6 py-3">
                                     <img src="/ink-dwp.svg" class="w-16 h-16 dark:invert" />
@@ -307,16 +309,16 @@ new #[Layout("layouts.app")] class extends Component {
                             </div>
                         </a>
 
-                        <a href="{{ route("insights.bpm.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                        <a href="{{ route('insights.bpm.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
                             <div class="flex items-center">
                                 <div class="px-6 py-3">
-                                    <img src="/ink-dwp.svg" class="w-16 h-16 dark:invert" />
+                                    <img src="/bpm.png" class="w-16 h-16 dark:invert fs-5" />
                                 </div>
                                 <div class="grow">
-                                    <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan Push Emergency BPM") }}</div>
+                                    <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan Emergency Bpm") }}</div>
                                     <div class="flex flex-col gap-y-2 text-neutral-600 dark:text-neutral-400">
                                         <div class="flex items-center gap-x-2 text-xs uppercase text-neutral-500">
-                                            <div class="w-2 h-2 {{ $bpm_lines_recent > 0 ? "bg-green-500" : "bg-red-500" }} rounded-full"></div>
+                                            <div class="w-2 h-2 {{ $bpm_lines_recent > 0 ? 'bg-green-500' : 'bg-red-500' }} rounded-full"></div>
                                             <div class="">{{ $bpm_lines_recent > 0 ? $bpm_lines_recent . " " . __("line ") : __("luring") }}</div>
                                         </div>
                                     </div>
@@ -333,7 +335,7 @@ new #[Layout("layouts.app")] class extends Component {
                 <div>
                     <h1 class="uppercase text-sm text-neutral-500 mb-4 px-8">{{ __("Sistem Area IP") }}</h1>
                     <div class="bg-white dark:bg-neutral-800 shadow overflow-hidden sm:rounded-lg divide-y divide-neutral-200 dark:text-white dark:divide-neutral-700">
-                        <a href="{{ route("insights.clm.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                        <a href="{{ route('insights.clm.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
                             <div class="flex items-center">
                                 <div class="grow px-6 py-3 flex gap-x-6 items-center">
                                     <div>
@@ -364,7 +366,7 @@ new #[Layout("layouts.app")] class extends Component {
                                 </div>
                             </div>
                         </a>
-                        <a href="{{ route("insights.stc.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                        <a href="{{ route('insights.stc.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
                             <div class="flex items-center">
                                 <div class="px-6 py-3">
                                     <img src="/ink-stc.svg" class="w-16 h-16 dark:invert" />
@@ -390,7 +392,7 @@ new #[Layout("layouts.app")] class extends Component {
                 <div>
                     <h1 class="uppercase text-sm text-neutral-500 mb-4 px-8">{{ __("Sistem Area OKC") }}</h1>
                     <div class="bg-white dark:bg-neutral-800 shadow overflow-hidden sm:rounded-lg divide-y divide-neutral-200 dark:text-white dark:divide-neutral-700">
-                        <a href="{{ route("insights.ldc.index") }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                        <a href="{{ route('insights.ldc.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
                             <div class="flex items-center">
                                 <div class="px-6 py-3">
                                     <img src="/ink-ldc.svg" class="w-16 h-16 dark:invert" />
@@ -399,8 +401,8 @@ new #[Layout("layouts.app")] class extends Component {
                                     <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Sistem data kulit") }}</div>
                                     <div class="flex flex-col gap-y-2 text-neutral-600 dark:text-neutral-400">
                                         <div class="flex items-center gap-x-2 text-xs uppercase text-neutral-500">
-                                            <div class="w-2 h-2 {{ $ldc_codes_recent > 0 ? "bg-green-500" : "bg-red-500" }} rounded-full"></div>
-                                            <div class="">{{ $ldc_codes_recent > 0 ? $ldc_codes_recent . " " . __("mesin ") : __("luring") }}</div>
+                                            <div class="w-2 h-2 {{ $ldc_codes_recent > 0 ? 'bg-green-500' : 'bg-red-500' }} rounded-full"></div>
+                                            <div>{{ $ldc_codes_recent > 0 ? $ldc_codes_recent . " " . __("mesin ") : __("luring") }}</div>
                                         </div>
                                     </div>
                                 </div>

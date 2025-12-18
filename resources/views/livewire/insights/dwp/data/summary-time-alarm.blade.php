@@ -595,39 +595,16 @@ new #[Layout("layouts.app")] class extends Component {
 
 @script
     <script>
-        let lineChart, dailyChart;
+        let dailyChart;
 
-        function initCharts(lineData, dailyData) {
-            // Line Chart (Bar Chart)
-            const lineCtx = document.getElementById('lineChart');
-            if (lineChart) lineChart.destroy();
-            
-            lineChart = new Chart(lineCtx, {
-                type: 'bar',
-                data: lineData,
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: false
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            ticks: {
-                                callback: function(value) {
-                                    return value.toLocaleString();
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-
+        function initCharts(dailyData) {
             // Daily Chart (Line Chart)
             const dailyCtx = document.getElementById('dailyChart');
+            if (!dailyCtx) {
+                console.error('dailyChart canvas not found');
+                return;
+            }
+            
             if (dailyChart) dailyChart.destroy();
             
             dailyChart = new Chart(dailyCtx, {
@@ -658,7 +635,7 @@ new #[Layout("layouts.app")] class extends Component {
         // Listen for refresh event
         $wire.on('refresh-charts', function(event) {
             const data = event[0] || event;
-            initCharts(data.lineChartData, data.dailyChartData);
+            initCharts(data.dailyChartData);
         });
 
         // Initial load

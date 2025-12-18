@@ -14,7 +14,6 @@ class InsBpmDevice extends Model
     protected $fillable = [
         'name',
         'line',
-        'machine',
         'ip_address',
         'config',
         'is_active',

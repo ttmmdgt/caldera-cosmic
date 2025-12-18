@@ -182,4 +182,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(InsStcAuth::class);
     }
+
+    public function ins_bpm_auths(): HasMany
+    {
+        return $this->hasMany(InsBpmAuth::class);
+    }
 }

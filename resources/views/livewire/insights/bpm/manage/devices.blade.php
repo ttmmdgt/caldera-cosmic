@@ -118,14 +118,14 @@ new #[Layout("layouts.app")] class extends Component {
             </div>
         </div>
 
-        <div wire:key="device-create">
+        <div wire:key="device-create-modal-wrapper">
             <x-modal name="device-create" maxWidth="xl">
-                <livewire:insights.dwp.manage.device-create />
+                <livewire:insights.bpm.manage.device-create wire:key="bpm-device-create-modal" lazy />
             </x-modal>
         </div>
-        <div wire:key="device-edit">
+        <div wire:key="device-edit-modal-wrapper">
             <x-modal name="device-edit" maxWidth="4xl">
-                <livewire:insights.dwp.manage.device-edit />
+                <livewire:insights.bpm.manage.device-edit wire:key="bpm-device-edit-modal" lazy />
             </x-modal>
         </div>
     </div>

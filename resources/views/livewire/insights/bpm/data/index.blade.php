@@ -41,8 +41,8 @@ new #[Layout("layouts.app")] class extends Component {
         if ($view === "raw" || $view === "summary" || $view === "summary-line") {
             $this->view_titles = [
                 "raw" => __("Raw Data"),
-                "summary" => __("Summary Plant BPM"),
-                "summary-line" => __("Summary Line BPM"),
+                "summary" => __("Summary Emergency (Per Plant)"),
+                "summary-line" => __("Summary Emergency (Per Line)"),
             ];
 
             $this->view_icons = [
