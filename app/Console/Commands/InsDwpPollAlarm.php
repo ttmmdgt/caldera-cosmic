@@ -42,6 +42,10 @@ class InsDwpPollAlarm extends Command
     private $lastSentDurationValues = []; // Track last sent duration per line
     public int $saveDuration = 0;
 
+    // Reset time configuration
+    protected $resetHour = 7; // Reset long duration at 7:00 AM
+    protected $lastResetDate = null; // Track when last reset was performed
+
     // Memory optimization counters
     protected $pollCycleCount = 0;
     protected $memoryCleanupInterval = 1000; // Clean memory every 1000 cycles
@@ -78,6 +82,9 @@ class InsDwpPollAlarm extends Command
             $cycleStartTime = microtime(true);
             $cycleReadings = 0;
             $cycleErrors = 0;
+
+            // Check if we need to reset long duration at 7:00 AM
+            $this->checkAndResetLongDuration($devices);
 
             foreach ($devices as $device) {
                 if ($this->option('v')) {
@@ -206,6 +213,72 @@ class InsDwpPollAlarm extends Command
                 $this->line("  No update needed - current max: {$currentMaxDuration}, last sent: {$lastSent}");
             }
         }
+    }
+
+    /**
+     * Check if it's time to reset long duration (at 7:00 AM daily)
+     * Resets the lastSentDurationValues to allow sending new max duration
+     */
+    private function checkAndResetLongDuration($devices)
+    {
+        $now = Carbon::now();
+        $currentHour = (int) $now->format('H');
+        $currentDate = $now->format('Y-m-d');
+
+        // Check if we're at or past reset hour (7:00 AM) and haven't reset today
+        if ($currentHour >= $this->resetHour && $this->lastResetDate !== $currentDate) {
+            if ($this->option('v')) {
+                $this->info("🔄 Performing daily reset of long duration at {$now->format('H:i:s')}");
+            }
+
+            // Reset the in-memory tracking of sent durations
+            $this->lastSentDurationValues = [];
+
+            // Send reset value (0) to all devices
+            foreach ($devices as $device) {
+                try {
+                    $this->sendResetDurationToDevice($device);
+                } catch (\Exception $e) {
+                    $this->error("  ✗ Error resetting duration on {$device->name}: " . $e->getMessage());
+                }
+            }
+
+            // Mark reset as done for today
+            $this->lastResetDate = $currentDate;
+
+            if ($this->option('v')) {
+                $this->info("✓ Long duration reset completed for {$currentDate}");
+            }
+        }
+    }
+
+    /**
+     * Send reset (0) value to device's long duration register
+     */
+    private function sendResetDurationToDevice(InsDwpDevice $device)
+    {
+        $registerAddr = $device->config[0]['dwp_alarm']['addr_long_duration'] ?? 609;
+
+        $connection = BinaryStreamConnection::getBuilder()
+            ->setHost($device->ip_address)
+            ->setPort($this->modbusPort)
+            ->build();
+
+        $packet = new WriteSingleRegisterRequest(
+            $registerAddr,    // Register address
+            0,                // Reset value to 0
+            1                 // Unit ID
+        );
+
+        $connection->connect();
+        $connection->send($packet);
+        $connection->close();
+
+        if ($this->option('v')) {
+            $this->info("  ✓ Reset long duration to 0 on {$device->name} (register {$registerAddr})");
+        }
+
+        return true;
     }
 
     private function pollDevice(InsDwpDevice $device)

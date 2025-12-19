@@ -313,7 +313,7 @@ new #[Layout("layouts.app")] class extends Component {
     }
 
     /**
-     * Get summary table data grouped by plant and line
+     * Get summary table data grouped by plant and line with sensor details
      */
     private function getSummaryTableData(): array
     {
@@ -323,6 +323,19 @@ new #[Layout("layouts.app")] class extends Component {
         $records = $query->orderBy('created_at', 'DESC')->get();
 
         $summary = [];
+
+        // Define sensor structure for each position
+        $defaultSensorData = [
+            'toe' => null,   // T1
+            'heel' => null,  // H1
+            'm1' => null,    // M1
+            'm2' => null,    // M2
+            'c1' => null,    // C1
+            'c2' => null,    // C2
+            'l1' => null,    // L1
+            'l2' => null,    // L2
+            'result' => null,
+        ];
 
         foreach ($records as $record) {
             $plant = $record->plant ?? 'Unknown';
@@ -342,10 +355,10 @@ new #[Layout("layouts.app")] class extends Component {
                     'line' => $line,
                     'latest_timestamp' => $timestamp,
                     'machines' => [
-                        '1' => ['L' => null, 'R' => null],
-                        '2' => ['L' => null, 'R' => null],
-                        '3' => ['L' => null, 'R' => null],
-                        '4' => ['L' => null, 'R' => null],
+                        '1' => ['L' => $defaultSensorData, 'R' => $defaultSensorData],
+                        '2' => ['L' => $defaultSensorData, 'R' => $defaultSensorData],
+                        '3' => ['L' => $defaultSensorData, 'R' => $defaultSensorData],
+                        '4' => ['L' => $defaultSensorData, 'R' => $defaultSensorData],
                     ]
                 ];
             }
@@ -361,13 +374,50 @@ new #[Layout("layouts.app")] class extends Component {
                 $posKey = 'L'; // default to Left if unclear
             }
 
-            // Set result for this machine-position if not already set (we want latest)
+            // Initialize machine if not exists
             if (!isset($summary[$key]['machines'][$machine])) {
-                $summary[$key]['machines'][$machine] = ['L' => null, 'R' => null];
+                $summary[$key]['machines'][$machine] = ['L' => $defaultSensorData, 'R' => $defaultSensorData];
             }
 
-            if ($summary[$key]['machines'][$machine][$posKey] === null) {
-                $summary[$key]['machines'][$machine][$posKey] = ($result === 'std') ? 'OK' : 'NG';
+            // Only process if not already set (we want latest record only)
+            if ($summary[$key]['machines'][$machine][$posKey]['result'] === null) {
+                $summary[$key]['machines'][$machine][$posKey]['result'] = ($result === 'std') ? 'OK' : 'NG';
+
+                // Extract sensor peak values from loadcell_data
+                $loadcellData = json_decode($record->loadcell_data, true);
+                if (isset($loadcellData['metadata']['cycles'])) {
+                    foreach ($loadcellData['metadata']['cycles'] as $cycle) {
+                        if (!isset($cycle['sensors'])) continue;
+
+                        foreach ($cycle['sensors'] as $sensorName => $values) {
+                            // Get peak value from sensor data
+                            $peakValue = is_array($values) ? max($values) : $values;
+
+                            // Map sensor names to our structure
+                            // Sensors may have suffixes like _L or _R for position
+                            $baseName = preg_replace('/[_-]?[LR]$/i', '', $sensorName);
+                            $baseName = strtoupper($baseName);
+
+                            $sensorMap = [
+                                'T1' => 'toe',
+                                'H1' => 'heel',
+                                'M1' => 'm1',
+                                'M2' => 'm2',
+                                'C1' => 'c1',
+                                'C2' => 'c2',
+                                'L1' => 'l1',
+                                'L2' => 'l2',
+                            ];
+
+                            if (isset($sensorMap[$baseName])) {
+                                $fieldName = $sensorMap[$baseName];
+                                if ($summary[$key]['machines'][$machine][$posKey][$fieldName] === null) {
+                                    $summary[$key]['machines'][$machine][$posKey][$fieldName] = round($peakValue);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -581,64 +631,143 @@ new #[Layout("layouts.app")] class extends Component {
                     <div class="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
                         <table class="min-w-full divide-y divide-neutral-200 dark:divide-neutral-700">
                             <thead class="bg-neutral-50 dark:bg-neutral-900">
+                                {{-- Row 1: Plant, Line, Timestamp, Machine Headers --}}
                                 <tr>
-                                    <th rowspan="2" class="px-4 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
+                                    <th rowspan="2" class="px-3 py-2 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
                                         {{ __("Plant") }}
                                     </th>
-                                    <th rowspan="2" class="px-4 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
+                                    <th rowspan="2" class="px-3 py-2 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
                                         {{ __("Line") }}
                                     </th>
-                                    <th rowspan="2" class="px-4 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
-                                        {{ __("Latest Timestamp") }}
+                                    <th rowspan="2" class="px-3 py-2 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
+                                        {{ __("Timestamp") }}
                                     </th>
-                                    <th colspan="2" class="px-4 py-3 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
-                                        {{ __("Mc 1") }}
-                                    </th>
-                                    <th colspan="2" class="px-4 py-3 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
-                                        {{ __("Mc 2") }}
-                                    </th>
-                                    <th colspan="2" class="px-4 py-3 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
-                                        {{ __("Mc 3") }}
-                                    </th>
-                                    <th colspan="2" class="px-4 py-3 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">
-                                        {{ __("Mc 4") }}
-                                    </th>
+                                    @foreach(['1', '2', '3', '4'] as $mc)
+                                        <th colspan="6" class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider {{ $mc !== '4' ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                            {{ __("Machine") }} {{ $mc }}
+                                        </th>
+                                    @endforeach
                                 </tr>
+                                {{-- Row 2: Left/Right sub-headers --}}
                                 <tr>
                                     @foreach(['1', '2', '3', '4'] as $mc)
-                                        <th class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase border-r border-neutral-200 dark:border-neutral-700">L</th>
-                                        <th class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase {{ $mc !== '4' ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">R</th>
+                                        <th colspan="3" class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase border-r border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800">
+                                            {{ __("Left") }}
+                                        </th>
+                                        <th colspan="3" class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase {{ $mc !== '4' ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }} bg-neutral-100 dark:bg-neutral-800">
+                                            {{ __("Right") }}
+                                        </th>
                                     @endforeach
                                 </tr>
                             </thead>
-                            <tbody class="bg-white dark:bg-neutral-800 divide-y divide-neutral-200 dark:divide-neutral-700">
-                                @foreach($rows as $row)
-                                    <tr>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700">
+                            <tbody class="bg-white dark:bg-neutral-800">
+                                @foreach($rows as $rowIndex => $row)
+                                    @php
+                                        $rowCount = 6; // Total rows per plant-line: toe, m1-c1-l1, m2-c2-l2, heel
+                                        $machines = ['1', '2', '3', '4'];
+                                        $positions = ['L', 'R'];
+                                    @endphp
+                                    
+                                    {{-- Row 1: Toe values --}}
+                                    <tr class="border-t-2 border-neutral-300 dark:border-neutral-600">
+                                        <td rowspan="4" class="px-3 py-2 whitespace-nowrap text-sm font-medium text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700 align-middle">
                                             {{ $row['plant'] }}
                                         </td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700">
+                                        <td rowspan="4" class="px-3 py-2 whitespace-nowrap text-sm text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700 align-middle">
                                             {{ $row['line'] }}
                                         </td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-neutral-600 dark:text-neutral-400 font-mono border-r border-neutral-200 dark:border-neutral-700">
-                                            {{ \Carbon\Carbon::parse($row['latest_timestamp'])->format('Y-m-d H:i:s') }}
+                                        <td rowspan="4" class="px-3 py-2 whitespace-nowrap text-xs text-neutral-600 dark:text-neutral-400 font-mono border-r border-neutral-200 dark:border-neutral-700 align-middle">
+                                            {{ \Carbon\Carbon::parse($row['latest_timestamp'])->format('m-d-Y') }}
                                         </td>
-                                        @foreach(['1', '2', '3', '4'] as $mc)
-                                            @foreach(['L', 'R'] as $pos)
+                                        @foreach($machines as $mc)
+                                            @foreach($positions as $pos)
                                                 @php
-                                                    $status = $row['machines'][$mc][$pos] ?? null;
+                                                    $data = $row['machines'][$mc][$pos] ?? [];
+                                                    $toeValue = $data['toe'] ?? null;
+                                                    $result = $data['result'] ?? null;
                                                     $bgClass = '';
-                                                    $textClass = '';
-                                                    if ($status === 'OK') {
-                                                        $bgClass = 'bg-green-500/20 dark:bg-green-500/30';
-                                                        $textClass = 'text-green-700 dark:text-green-300 font-semibold';
-                                                    } elseif ($status === 'NG') {
-                                                        $bgClass = 'bg-red-500 dark:bg-red-600';
-                                                        $textClass = 'text-white font-bold';
+                                                    if ($result === 'NG') {
+                                                        $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
                                                     }
                                                 @endphp
-                                                <td class="px-2 py-3 whitespace-nowrap text-sm text-center {{ $bgClass }} {{ $textClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
-                                                    {{ $status ?? '—' }}
+                                                <td colspan="3" class="px-2 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $toeValue ?? '—' }}
+                                                </td>
+                                            @endforeach
+                                        @endforeach
+                                    </tr>
+
+                                    {{-- Row 2: m1, c1, l1 values --}}
+                                    <tr>
+                                        @foreach($machines as $mc)
+                                            @foreach($positions as $pos)
+                                                @php
+                                                    $data = $row['machines'][$mc][$pos] ?? [];
+                                                    $m1 = $data['m1'] ?? null;
+                                                    $c1 = $data['c1'] ?? null;
+                                                    $l1 = $data['l1'] ?? null;
+                                                    $result = $data['result'] ?? null;
+                                                    $bgClass = '';
+                                                    if ($result === 'NG') {
+                                                        $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
+                                                    }
+                                                @endphp
+                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $m1 ?? '—' }}
+                                                </td>
+                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $c1 ?? '—' }}
+                                                </td>
+                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $l1 ?? '—' }}
+                                                </td>
+                                            @endforeach
+                                        @endforeach
+                                    </tr>
+
+                                    {{-- Row 3: m2, c2, l2 values --}}
+                                    <tr>
+                                        @foreach($machines as $mc)
+                                            @foreach($positions as $pos)
+                                                @php
+                                                    $data = $row['machines'][$mc][$pos] ?? [];
+                                                    $m2 = $data['m2'] ?? null;
+                                                    $c2 = $data['c2'] ?? null;
+                                                    $l2 = $data['l2'] ?? null;
+                                                    $result = $data['result'] ?? null;
+                                                    $bgClass = '';
+                                                    if ($result === 'NG') {
+                                                        $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
+                                                    }
+                                                @endphp
+                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $m2 ?? '—' }}
+                                                </td>
+                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $c2 ?? '—' }}
+                                                </td>
+                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $l2 ?? '—' }}
+                                                </td>
+                                            @endforeach
+                                        @endforeach
+                                    </tr>
+
+                                    {{-- Row 4: Heel values --}}
+                                    <tr class="border-b border-neutral-200 dark:border-neutral-700">
+                                        @foreach($machines as $mc)
+                                            @foreach($positions as $pos)
+                                                @php
+                                                    $data = $row['machines'][$mc][$pos] ?? [];
+                                                    $heelValue = $data['heel'] ?? null;
+                                                    $result = $data['result'] ?? null;
+                                                    $bgClass = '';
+                                                    if ($result === 'NG') {
+                                                        $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
+                                                    }
+                                                @endphp
+                                                <td colspan="3" class="px-2 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $heelValue ?? '—' }}
                                                 </td>
                                             @endforeach
                                         @endforeach
