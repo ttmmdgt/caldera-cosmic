@@ -77,7 +77,7 @@ def load_exclusion_list(file_path):
     return set()
 
 def get_language_files():
-    lang_dir = 'lang/'
+    lang_dir = '../../lang/'
     if not os.path.exists(lang_dir):
         print(f"Peringatan: Direktori bahasa '{lang_dir}' tidak ada.")
         return []
@@ -133,10 +133,10 @@ def extract_translations():
     print("="*60)
     
     # Define directories
-    resources_directory = 'resources/'
-    app_directory = 'app/'
-    output_file = 'lang/en.json'
-    exclusion_file = 'py/translation-extract/exception.json'
+    resources_directory = '../../resources/'
+    app_directory = '../../app/'
+    output_file = '../../lang/en.json'
+    exclusion_file = 'exception.json'
     
     # Load existing translations and exclusion list
     print("\nMemuat terjemahan yang ada dan pengecualian...")
@@ -186,8 +186,8 @@ def remove_unused():
     
     # Scan for current translation strings
     print("\nMemindai string terjemahan saat ini...")
-    blade_strings = scan_directory('resources/', '.blade.php')
-    php_strings = scan_directory('app/', '.php')
+    blade_strings = scan_directory('../../resources/', '.blade.php')
+    php_strings = scan_directory('../../app/', '.php')
     all_translation_strings = blade_strings.union(php_strings)
     
     # Find unused translations

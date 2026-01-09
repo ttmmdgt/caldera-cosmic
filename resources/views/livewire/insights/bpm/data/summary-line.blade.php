@@ -5,21 +5,27 @@ use App\Models\InsBpmCount;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Livewire\Attributes\Url;
+use App\Traits\HasDateRangeFilter;
 
 new class extends Component {
+    use HasDateRangeFilter;
+    
     public $view = "summary-line";
     
     #[Url]
-    public $dateFrom;
+    public $start_at;
     
     #[Url]
-    public $dateTo;
+    public $end_at;
     
     #[Url]
     public $plant = 'G';
     
     #[Url]
     public $line = '1';
+    
+    #[Url]
+    public $condition = 'all';
     
     public $lastUpdated;
     public $summaryCards = [];
@@ -33,22 +39,23 @@ new class extends Component {
     {
         $this->dispatch('update-menu', 'summary-line');
         
-        // Set default dates - last 7 days
-        $this->dateFrom = now()->subDays(6)->format('Y-m-d');
-        $this->dateTo = now()->format('Y-m-d');
+        // Set default dates if not set
+        if (! $this->start_at || ! $this->end_at) {
+            $this->setThisWeek();
+        }
         
         // Load initial data
         $this->loadData();
         $this->refreshCharts();
     }
     
-    public function updatedDateFrom()
+    public function updatedStartAt()
     {
         $this->loadData();
         $this->refreshCharts();
     }
     
-    public function updatedDateTo()
+    public function updatedEndAt()
     {
         $this->loadData();
         $this->refreshCharts();
@@ -65,26 +72,107 @@ new class extends Component {
         $this->loadData();
         $this->refreshCharts();
     }
+    
+    public function updatedCondition()
+    {
+        $this->loadData();
+        $this->refreshCharts();
+    }
+
+    public function setToday()
+    {
+        $this->start_at = now()->format('Y-m-d');
+        $this->end_at = now()->format('Y-m-d');
+        $this->loadData();
+        $this->refreshCharts();
+    }
+
+    public function setYesterday()
+    {
+        $this->start_at = now()->subDay()->format('Y-m-d');
+        $this->end_at = now()->subDay()->format('Y-m-d');
+        $this->loadData();
+        $this->refreshCharts();
+    }
+
+    public function setThisWeek()
+    {
+        $this->start_at = now()->startOfWeek()->format('Y-m-d');
+        $this->end_at = now()->endOfWeek()->format('Y-m-d');
+        $this->loadData();
+        $this->refreshCharts();
+    }
+
+    public function setLastWeek()
+    {
+        $this->start_at = now()->subWeek()->startOfWeek()->format('Y-m-d');
+        $this->end_at = now()->subWeek()->endOfWeek()->format('Y-m-d');
+        $this->loadData();
+        $this->refreshCharts();
+    }
+
+    public function setThisMonth()
+    {
+        $this->start_at = now()->startOfMonth()->format('Y-m-d');
+        $this->end_at = now()->endOfMonth()->format('Y-m-d');
+        $this->loadData();
+        $this->refreshCharts();
+    }
+
+    public function setLastMonth()
+    {
+        $this->start_at = now()->subMonth()->startOfMonth()->format('Y-m-d');
+        $this->end_at = now()->subMonth()->endOfMonth()->format('Y-m-d');
+        $this->loadData();
+        $this->refreshCharts();
+    }
 
     public function loadData()
     {
-        $from = Carbon::parse($this->dateFrom)->startOfDay();
-        $to = Carbon::parse($this->dateTo)->endOfDay();
+        $from = Carbon::parse($this->start_at)->startOfDay();
+        $to = Carbon::parse($this->end_at)->endOfDay();
 
         // Total Emergency for selected plant and line
-        $totalEmergency = InsBpmCount::whereBetween('created_at', [$from, $to])
+        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
             ->where('plant', $this->plant)
-            ->where('line', $this->line)
-            ->sum('incremental');
+            ->where('line', $this->line);
+        
+        if ($this->condition !== 'all') {
+            $query->where('condition', $this->condition);
+        }
+        
+        $totalEmergency = $query->sum('cumulative');
 
         // Emergency by machine for selected plant and line
-        $emergencyByMachine = InsBpmCount::whereBetween('created_at', [$from, $to])
+        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
             ->where('plant', $this->plant)
-            ->where('line', $this->line)
-            ->select('machine', DB::raw('SUM(incremental) as total'))
-            ->groupBy('machine')
-            ->orderByDesc('total')
-            ->get();
+            ->where('line', $this->line);
+        
+        if ($this->condition !== 'all') {
+            $query->where('condition', $this->condition);
+            $emergencyByMachine = $query->select('machine', DB::raw('SUM(cumulative) as total'))
+                ->groupBy('machine')
+                ->orderByDesc('total')
+                ->get();
+        } else {
+            // Get data grouped by machine and condition for stacked chart
+            $emergencyByMachine = InsBpmCount::whereBetween('created_at', [$from, $to])
+                ->where('plant', $this->plant)
+                ->where('line', $this->line)
+                ->select('machine', 'condition', DB::raw('SUM(cumulative) as total'))
+                ->groupBy('machine', 'condition')
+                ->get();
+            
+            // Calculate total per machine for sorting
+            $machineTotals = $emergencyByMachine->groupBy('machine')
+                ->map(fn($items) => $items->sum('total'))
+                ->sortDesc();
+            
+            // Add total field for compatibility
+            $emergencyByMachine = $machineTotals->map(function($total, $machine) {
+                return (object)['machine' => $machine, 'total' => $total];
+            })->values();
+        }
 
         // Find highest and lowest
         $highest = $emergencyByMachine->first();
@@ -97,39 +185,60 @@ new class extends Component {
         $this->summaryCards = [
             [
                 'label' => 'TOTAL EMERGENCY',
-                'sublabel' => 'Plant ' . $this->plant . ' Line ' . $this->line . ' - Semua Mesin',
+                'sublabel' => 'Plant ' . $this->plant . ' Line ' . $this->line . ' - A',
                 'value' => $totalEmergency,
                 'color' => 'red',
             ],
             [
-                'label' => 'TERTINGGI',
+                'label' => 'HIGHEST',
                 'sublabel' => $highest ? $highest->machine : '-',
                 'value' => $highest ? $highest->total : 0,
                 'color' => 'red',
             ],
             [
-                'label' => 'TERENDAH',
+                'label' => 'LOWEST',
                 'sublabel' => $lowest ? $lowest->machine : '-',
                 'value' => $lowest ? $lowest->total : 0,
                 'color' => 'green',
             ],
             [
-                'label' => 'RATA-RATA PER MESIN',
-                'sublabel' => 'Emergency/Mesin',
+                'label' => 'AVERAGE PER MACHINE',
+                'sublabel' => 'Emergency/Machine',
                 'value' => $average,
                 'color' => 'blue',
             ],
         ];
 
         // Emergency by machine data for bar chart
-        $maxTotal = $emergencyByMachine->max('total');
-        $this->emergencyByMachine = $emergencyByMachine->map(function ($item) use ($maxTotal) {
-            return [
-                'machine' => $item->machine,
-                'total' => $item->total,
-                'color' => $this->getColorForValue($item->total, $maxTotal)
-            ];
-        })->toArray();
+        if ($this->condition === 'all') {
+            // Store detailed data for stacked chart
+            $rawData = InsBpmCount::whereBetween('created_at', [$from, $to])
+                ->where('plant', $this->plant)
+                ->where('line', $this->line)
+                ->select('machine', 'condition', DB::raw('SUM(cumulative) as total'))
+                ->groupBy('machine', 'condition')
+                ->get();
+            
+            $this->emergencyByMachine = $emergencyByMachine->map(function ($item) use ($rawData) {
+                $hot = $rawData->where('machine', $item->machine)->where('condition', 'hot')->first()->total ?? 0;
+                $cold = $rawData->where('machine', $item->machine)->where('condition', 'cold')->first()->total ?? 0;
+                return [
+                    'machine' => $item->machine,
+                    'total' => $item->total,
+                    'hot' => $hot,
+                    'cold' => $cold,
+                ];
+            })->toArray();
+        } else {
+            $maxTotal = $emergencyByMachine->max('total');
+            $this->emergencyByMachine = $emergencyByMachine->map(function ($item) use ($maxTotal) {
+                return [
+                    'machine' => $item->machine,
+                    'total' => $item->total,
+                    'color' => $this->getColorForValue($item->total, $maxTotal)
+                ];
+            })->toArray();
+        }
 
         // Trend by hour
         $this->loadTrendData($from, $to);
@@ -162,13 +271,18 @@ new class extends Component {
     private function loadTrendData($from, $to)
     {
         // Get hourly data
-        $hourlyData = InsBpmCount::whereBetween('created_at', [$from, $to])
+        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
             ->where('plant', $this->plant)
-            ->where('line', $this->line)
-            ->select(
+            ->where('line', $this->line);
+        
+        if ($this->condition !== 'all') {
+            $query->where('condition', $this->condition);
+        }
+        
+        $hourlyData = $query->select(
                 'machine',
                 DB::raw('HOUR(created_at) as hour'),
-                DB::raw('SUM(incremental) as total')
+                DB::raw('SUM(cumulative) as total')
             )
             ->groupBy('machine', 'hour')
             ->orderBy('hour')
@@ -276,14 +390,47 @@ new class extends Component {
             ];
         }
         
+        // Check if we have hot/cold breakdown (condition = 'all')
+        $hasConditionBreakdown = isset($this->emergencyByMachine[0]['hot']);
+        
+        if ($hasConditionBreakdown) {
+            // Stacked bar chart with hot and cold
+            return [
+                'labels' => collect($this->emergencyByMachine)->pluck('machine')->toArray(),
+                'datasets' => [
+                    [
+                        'label' => 'Hot',
+                        'data' => collect($this->emergencyByMachine)->pluck('hot')->toArray(),
+                        'backgroundColor' => 'rgba(239, 68, 68, 0.8)',
+                        'borderColor' => 'rgba(239, 68, 68, 1)',
+                        'borderWidth' => 1,
+                    ],
+                    [
+                        'label' => 'Cold',
+                        'data' => collect($this->emergencyByMachine)->pluck('cold')->toArray(),
+                        'backgroundColor' => 'rgba(59, 130, 246, 0.8)',
+                        'borderColor' => 'rgba(59, 130, 246, 1)',
+                        'borderWidth' => 1,
+                    ]
+                ]
+            ];
+        }
+        
+        // Single dataset for specific condition - use condition-specific color
+        $conditionColor = $this->condition === 'hot' 
+            ? ['bg' => 'rgba(239, 68, 68, 0.8)', 'border' => 'rgba(239, 68, 68, 1)']
+            : ['bg' => 'rgba(59, 130, 246, 0.8)', 'border' => 'rgba(59, 130, 246, 1)'];
+        
+        $machineCount = count($this->emergencyByMachine);
+        
         return [
             'labels' => collect($this->emergencyByMachine)->pluck('machine')->toArray(),
             'datasets' => [
                 [
-                    'label' => 'Emergency Counter',
+                    'label' => ucfirst($this->condition),
                     'data' => collect($this->emergencyByMachine)->pluck('total')->toArray(),
-                    'backgroundColor' => collect($this->emergencyByMachine)->pluck('color')->toArray(),
-                    'borderColor' => collect($this->emergencyByMachine)->map(fn($item) => str_replace('0.8', '1', $item['color']))->toArray(),
+                    'backgroundColor' => array_fill(0, $machineCount, $conditionColor['bg']),
+                    'borderColor' => array_fill(0, $machineCount, $conditionColor['border']),
                     'borderWidth' => 1,
                 ]
             ]
@@ -296,13 +443,46 @@ new class extends Component {
     <div class="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
         <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-end flex-1">
             <div>
-                <label class="block text-sm font-medium mb-2">{{ __('RENTANG') }}</label>
-                <div class="flex gap-2 items-center">
-                    <input type="date" wire:model.live="dateFrom" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
-                    <span class="text-gray-500">-</span>
-                    <input type="date" wire:model.live="dateTo" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
+                <div class="flex mb-2 text-xs text-neutral-500">
+                    <div class="flex">
+                        <x-dropdown align="left" width="48">
+                            <x-slot name="trigger">
+                                <x-text-button class="uppercase ml-3">
+                                    {{ __("RENTANG") }}
+                                    <i class="icon-chevron-down ms-1"></i>
+                                </x-text-button>
+                            </x-slot>
+                            <x-slot name="content">
+                                <x-dropdown-link href="#" wire:click.prevent="setToday">
+                                    {{ __("Hari ini") }}
+                                </x-dropdown-link>
+                                <x-dropdown-link href="#" wire:click.prevent="setYesterday">
+                                    {{ __("Kemarin") }}
+                                </x-dropdown-link>
+                                <hr class="border-neutral-300 dark:border-neutral-600" />
+                                <x-dropdown-link href="#" wire:click.prevent="setThisWeek">
+                                    {{ __("Minggu ini") }}
+                                </x-dropdown-link>
+                                <x-dropdown-link href="#" wire:click.prevent="setLastWeek">
+                                    {{ __("Minggu lalu") }}
+                                </x-dropdown-link>
+                                <hr class="border-neutral-300 dark:border-neutral-600" />
+                                <x-dropdown-link href="#" wire:click.prevent="setThisMonth">
+                                    {{ __("Bulan ini") }}
+                                </x-dropdown-link>
+                                <x-dropdown-link href="#" wire:click.prevent="setLastMonth">
+                                    {{ __("Bulan lalu") }}
+                                </x-dropdown-link>
+                            </x-slot>
+                        </x-dropdown>
+                    </div>
+                </div>
+                <div class="flex gap-3">
+                    <x-text-input wire:model.live="start_at" type="date" class="w-40" />
+                    <x-text-input wire:model.live="end_at" type="date" class="w-40" />
                 </div>
             </div>
+            <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
             <div>
                 <label class="block text-sm font-medium mb-2">{{ __('LINE') }}</label>
                 <select wire:model.live="line" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
@@ -326,6 +506,14 @@ new class extends Component {
                     <option value="H">H</option>
                     <option value="I">I</option>
                     <option value="J">J</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2">{{ __('CONDITION') }}</label>
+                <select wire:model.live="condition" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
+                    <option value="all">All</option>
+                    <option value="hot">Hot</option>
+                    <option value="cold">Cold</option>
                 </select>
             </div>
         </div>
@@ -401,7 +589,7 @@ new class extends Component {
                             </div>
                             <div>
                                 <div class="font-semibold text-sm">{{ __('Line') }} {{ $item['line'] }}</div>
-                                <div class="text-xs text-gray-500">{{ $item['machine'] }}</div>
+                                <div class="text-xs text-gray-500">Machine - {{ $item['machine'] }}</div>
                             </div>
                         </div>
                         <div class="text-lg font-bold {{ $item['rank'] == 1 ? 'text-red-600' : ($item['rank'] == 2 ? 'text-orange-600' : ($item['rank'] == 3 ? 'text-yellow-600' : 'text-green-600')) }}">
@@ -455,23 +643,30 @@ new class extends Component {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { display: false },
+                        legend: { 
+                            display: true,
+                            position: 'top'
+                        },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    return context.parsed.x + ' counts';
+                                    return context.dataset.label + ': ' + context.parsed.x + ' counts';
                                 }
                             }
                         }
                     },
                     scales: {
                         x: {
+                            stacked: true,
                             beginAtZero: true,
                             ticks: {
                                 callback: function(value) {
                                     return value.toLocaleString();
                                 }
                             }
+                        },
+                        y: {
+                            stacked: true
                         }
                     }
                 }

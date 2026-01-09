@@ -5,11 +5,22 @@ namespace App\Console\Commands;
 use App\Models\InsDwpDevice;
 use Illuminate\Console\Command;
 use ModbusTcpClient\Composer\Write\WriteRegistersBuilder;
-use ModbusTcpClient\Network\NonBlockingClient;
 use ModbusTcpClient\Composer\Write\WriteCoilsBuilder;
+use ModbusTcpClient\Composer\Read\ReadRegistersBuilder;
+use ModbusTcpClient\Network\NonBlockingClient;
+use ModbusTcpClient\Network\BinaryStreamConnection;
+use ModbusTcpClient\Packet\ModbusFunction\WriteSingleCoilRequest;
+use ModbusTcpClient\Packet\ModbusFunction\WriteSingleRegisterRequest;
+use ModbusTcpClient\Packet\ResponseFactory;
+use ModbusTcpClient\Utils\Types;
 
 class InsDwpReset extends Command
 {
+    // Configuration variables
+    protected $pollIntervalSeconds = 1;
+    protected $modbusTimeoutSeconds = 2;
+    protected $modbusPort = 503;
+
     /**
      * The name and signature of the console command.
      *
@@ -49,6 +60,7 @@ class InsDwpReset extends Command
 
             try {
                 $this->resetDevice($device);
+                $this->sendResetDurationToDevice($device);
                 $successCount++;
             } catch (\Throwable $th) {
                 $this->error("✗ Error resetting {$device->name} ({$device->ip_address}): " . $th->getMessage());
@@ -96,5 +108,34 @@ class InsDwpReset extends Command
                 throw $e; // Re-throw to be caught by parent try-catch
             }
         }
+    }
+
+    /**
+     * Send reset (0) value to device's long duration register
+     */
+    private function sendResetDurationToDevice(InsDwpDevice $device)
+    {
+        $registerAddr = $device->config[0]['dwp_alarm']['addr_long_duration'] ?? 609;
+
+        $connection = BinaryStreamConnection::getBuilder()
+            ->setHost("172.70.87.35")
+            ->setPort(503)
+            ->build();
+
+        $packet = new WriteSingleRegisterRequest(
+            609,    // Register address
+            0,                // Reset value to 0
+            1                 // Unit ID
+        );
+
+        $connection->connect();
+        $connection->send($packet);
+        $connection->close();
+
+        if ($this->option('v')) {
+            $this->info("  ✓ Reset long duration to 0 on {$device->name} (register {$registerAddr})");
+        }
+
+        return true;
     }
 }

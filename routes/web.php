@@ -15,6 +15,9 @@ Volt::route('/inventory/help', 'inventory.help')->name('inventory.help');
 
 Volt::route('/announcements/{id}', 'announcements.show')->name('announcements.show');
 
+// Uptime Monitoring routes
+Volt::route('/uptime', 'uptime.monitor')->name('uptime.monitor');
+
 // Insights routes
 Route::prefix('insights')->group(function () {
 
@@ -234,11 +237,12 @@ Route::prefix('insights')->group(function () {
     });
 
     Route::name('insights.stc.')->group(function () {
-
         Volt::route('/stc/manage/authorizations', 'insights.stc.manage.auths')->name('manage.auths');
         Volt::route('/stc/manage/machines', 'insights.stc.manage.machines')->name('manage.machines');
         Volt::route('/stc/manage/devices', 'insights.stc.manage.devices')->name('manage.devices');
+        Volt::route('/stc/manage/models', 'insights.stc.manage.models')->name('manage.models');
         Volt::route('/stc/manage', 'insights.stc.manage.index')->name('manage.index');
+
         Volt::route('/stc/data/adjustments', 'insights.stc.data.adjustments')->name('data.adjustments');
         Volt::route('/stc/data', 'insights.stc.data.index')->name('data.index');
         Volt::route('/stc/create', 'insights.stc.create.index')->name('create.index');

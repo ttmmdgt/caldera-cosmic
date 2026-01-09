@@ -9,28 +9,35 @@ use Livewire\Attributes\Url;
 
 new class extends Component {
     public $view = "summary";
-    public $dateFrom;
-    public $dateTo;
-
+    
     #[Url]
-    public $plant;
+    public $start_at;
+    
+    #[Url]
+    public $end_at;
+    
+    #[Url]
+    public $plant = '';
+    
+    #[Url]
+    public $condition = 'all';
 
     public $lastUpdated;
     public $summaryCards = [];
     public $rankingData = [];
     public $chartLabels = [];
     public $chartData = [];
-    public $rankingDatav1 = [];
+    public $chartDatasets = [];
 
     public function mount()
     {
         // update menu
         $this->dispatch("update-menu", $this->view);
         
-        // Set default dates
-        $this->dateFrom = now()->subDays(7)->format('Y-m-d');
-        $this->dateTo = now()->format('Y-m-d');
-        $this->plant = '';
+        // Set default dates if not set
+        if (! $this->start_at || ! $this->end_at) {
+            $this->setThisWeek();
+        }
         
         // Load initial data
         $this->loadData();
@@ -45,21 +52,79 @@ new class extends Component {
             'lastUpdated' => $this->lastUpdated,
         ];
     }
+    
+    public function setToday()
+    {
+        $this->start_at = now()->format('Y-m-d');
+        $this->end_at = now()->format('Y-m-d');
+        $this->loadData();
+        $this->generateEmergencyChart();
+    }
+
+    public function setYesterday()
+    {
+        $this->start_at = now()->subDay()->format('Y-m-d');
+        $this->end_at = now()->subDay()->format('Y-m-d');
+        $this->loadData();
+        $this->generateEmergencyChart();
+    }
+
+    public function setThisWeek()
+    {
+        $this->start_at = now()->startOfWeek()->format('Y-m-d');
+        $this->end_at = now()->endOfWeek()->format('Y-m-d');
+        $this->loadData();
+        $this->generateEmergencyChart();
+    }
+
+    public function setLastWeek()
+    {
+        $this->start_at = now()->subWeek()->startOfWeek()->format('Y-m-d');
+        $this->end_at = now()->subWeek()->endOfWeek()->format('Y-m-d');
+        $this->loadData();
+        $this->generateEmergencyChart();
+    }
+
+    public function setThisMonth()
+    {
+        $this->start_at = now()->startOfMonth()->format('Y-m-d');
+        $this->end_at = now()->endOfMonth()->format('Y-m-d');
+        $this->loadData();
+        $this->generateEmergencyChart();
+    }
+
+    public function setLastMonth()
+    {
+        $this->start_at = now()->subMonth()->startOfMonth()->format('Y-m-d');
+        $this->end_at = now()->subMonth()->endOfMonth()->format('Y-m-d');
+        $this->loadData();
+        $this->generateEmergencyChart();
+    }
 
     public function loadData()
     {
-        $from = Carbon::parse($this->dateFrom)->startOfDay();
-        $to = Carbon::parse($this->dateTo)->endOfDay();
+        $from = Carbon::parse($this->start_at)->startOfDay();
+        $to = Carbon::parse($this->end_at)->endOfDay();
 
         // Calculate total emergency across all lines
-        $totalEmergency = InsBpmCount::whereBetween('created_at', [$from, $to])
-            ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
-            ->sum('incremental');
+        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
+            ->when($this->plant, fn($q) => $q->where('plant', $this->plant));
+        
+        if ($this->condition !== 'all') {
+            $query->where('condition', $this->condition);
+        }
+        
+        $totalEmergency = $query->sum('cumulative');
 
         // Get emergency count per line
-        $emergencyPerLine = InsBpmCount::whereBetween('created_at', [$from, $to])
-            ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
-            ->select('line', DB::raw('SUM(incremental) as total'))
+        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
+            ->when($this->plant, fn($q) => $q->where('plant', $this->plant));
+        
+        if ($this->condition !== 'all') {
+            $query->where('condition', $this->condition);
+        }
+        
+        $emergencyPerLine = $query->select('line', DB::raw('SUM(cumulative) as total'))
             ->groupBy('line')
             ->orderByDesc('total')
             ->get();
@@ -105,18 +170,23 @@ new class extends Component {
         // Load ranking data
         $this->loadRankingData();
 
-        $this->lastUpdated = now()->format('m/d/Y, H:i:s');
+        $this->lastUpdated = now()->format('n/j/Y, H:i.s');
     }
 
     public function loadRankingData()
     {
-        $from = Carbon::parse($this->dateFrom)->startOfDay();
-        $to = Carbon::parse($this->dateTo)->endOfDay();
+        $from = Carbon::parse($this->start_at)->startOfDay();
+        $to = Carbon::parse($this->end_at)->endOfDay();
 
         // Get ranking data - grouped by line and machine
-        $this->rankingData = InsBpmCount::whereBetween('created_at', [$from, $to])
-            ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
-            ->select('line', 'machine', DB::raw('SUM(incremental) as total_counter'))
+        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
+            ->when($this->plant, fn($q) => $q->where('plant', $this->plant));
+        
+        if ($this->condition !== 'all') {
+            $query->where('condition', $this->condition);
+        }
+        
+        $this->rankingData = $query->select('line', 'machine', DB::raw('SUM(cumulative) as total_counter'))
             ->groupBy('line', 'machine')
             ->orderByDesc('total_counter')
             ->limit(16)
@@ -125,34 +195,100 @@ new class extends Component {
 
     public function generateEmergencyChart()
     {
-        $from = Carbon::parse($this->dateFrom)->startOfDay();
-        $to = Carbon::parse($this->dateTo)->endOfDay();
+        $from = Carbon::parse($this->start_at)->startOfDay();
+        $to = Carbon::parse($this->end_at)->endOfDay();
 
-        // Load Emergency Counter data (grouped by line and machine)
-        $emergencyData = InsBpmCount::whereBetween('created_at', [$from, $to])
-            ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
-            ->select(
-                'line',
-                'machine',
-                DB::raw('SUM(incremental) as total_counter')
-            )
-            ->groupBy('line', 'machine')
-            ->orderByDesc('total_counter')
-            ->limit(20)
-            ->get();
+        if ($this->condition === 'all') {
+            // Load Emergency Counter data with hot/cold breakdown
+            $emergencyData = InsBpmCount::whereBetween('created_at', [$from, $to])
+                ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
+                ->select(
+                    'line',
+                    'machine',
+                    'condition',
+                    DB::raw('SUM(cumulative) as total_counter')
+                )
+                ->groupBy('line', 'machine', 'condition')
+                ->get();
+            
+            // Get unique line-machine combinations and calculate totals
+            $lineMachines = $emergencyData->groupBy(function($item) {
+                return $item->line . '-' . $item->machine;
+            })->map(function($items, $key) {
+                $parts = explode('-', $key);
+                return [
+                    'line' => $parts[0],
+                    'machine' => $parts[1],
+                    'total' => $items->sum('total_counter'),
+                    'hot' => $items->where('condition', 'hot')->first()->total_counter ?? 0,
+                    'cold' => $items->where('condition', 'cold')->first()->total_counter ?? 0,
+                ];
+            })->sortByDesc('total')->take(20)->values();
+            
+            // Format labels
+            $labels = $lineMachines->map(function($item) {
+                return $item['line'] . ' - Mesin ' . $item['machine'];
+            })->toArray();
+            
+            // Store in component properties
+            $this->chartLabels = $labels;
+            $this->chartDatasets = [
+                [
+                    'label' => 'Hot',
+                    'data' => $lineMachines->pluck('hot')->map(fn($v) => (int) $v)->toArray(),
+                    'backgroundColor' => 'rgba(239, 68, 68, 0.8)',
+                    'borderColor' => 'rgba(239, 68, 68, 1)',
+                    'borderWidth' => 1,
+                ],
+                [
+                    'label' => 'Cold',
+                    'data' => $lineMachines->pluck('cold')->map(fn($v) => (int) $v)->toArray(),
+                    'backgroundColor' => 'rgba(59, 130, 246, 0.8)',
+                    'borderColor' => 'rgba(59, 130, 246, 1)',
+                    'borderWidth' => 1,
+                ]
+            ];
+        } else {
+            // Load Emergency Counter data for specific condition
+            $emergencyData = InsBpmCount::whereBetween('created_at', [$from, $to])
+                ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
+                ->where('condition', $this->condition)
+                ->select(
+                    'line',
+                    'machine',
+                    DB::raw('SUM(cumulative) as total_counter')
+                )
+                ->groupBy('line', 'machine')
+                ->orderByDesc('total_counter')
+                ->limit(20)
+                ->get();
 
-        // Format labels and extract data
-        $labels = $emergencyData->map(function($item) {
-            return $item->line . ' - Mesin ' . $item->machine;
-        })->values()->toArray();
-        
-        $data = $emergencyData->pluck('total_counter')->map(function($value) {
-            return (int) $value;
-        })->values()->toArray();
+            // Format labels and extract data
+            $labels = $emergencyData->map(function($item) {
+                return $item->line . ' - Mesin ' . $item->machine;
+            })->values()->toArray();
+            
+            $data = $emergencyData->pluck('total_counter')->map(function($value) {
+                return (int) $value;
+            })->values()->toArray();
 
-        // Store in component properties
-        $this->chartLabels = $labels;
-        $this->chartData = $data;
+            // Determine color based on condition
+            $conditionColor = $this->condition === 'hot' 
+                ? ['bg' => 'rgba(239, 68, 68, 0.8)', 'border' => 'rgba(239, 68, 68, 1)']
+                : ['bg' => 'rgba(59, 130, 246, 0.8)', 'border' => 'rgba(59, 130, 246, 1)'];
+            
+            // Store in component properties
+            $this->chartLabels = $labels;
+            $this->chartDatasets = [
+                [
+                    'label' => ucfirst($this->condition),
+                    'data' => $data,
+                    'backgroundColor' => $conditionColor['bg'],
+                    'borderColor' => $conditionColor['border'],
+                    'borderWidth' => 1,
+                ]
+            ];
+        }
         
         // Dispatch browser event to trigger chart refresh
         $this->dispatch('chart-data-updated')->self();
@@ -160,7 +296,7 @@ new class extends Component {
 
     public function updated($property)
     {
-        if (in_array($property, ['dateFrom', 'dateTo', 'plant'])) {
+        if (in_array($property, ['start_at', 'end_at', 'plant', 'condition'])) {
             $this->loadData();
             $this->generateEmergencyChart();
         }
@@ -169,33 +305,76 @@ new class extends Component {
 
 <div class="p-6 space-y-6">
     {{-- Header with Filters --}}
-    <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4">
+    <div class="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+        <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-end flex-1">
             <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">RENTANG</label>
-                <div class="flex gap-2 mt-1">
-                    <x-text-input wire:model.live="dateFrom" type="date" class="w-40" />
-                    <x-text-input wire:model.live="dateTo" type="date" class="w-40" />
+                <div class="flex mb-2 text-xs text-neutral-500">
+                    <div class="flex">
+                        <x-dropdown align="left" width="48">
+                            <x-slot name="trigger">
+                                <x-text-button class="uppercase ml-3">
+                                    {{ __("RENTANG") }}
+                                    <i class="icon-chevron-down ms-1"></i>
+                                </x-text-button>
+                            </x-slot>
+                            <x-slot name="content">
+                                <x-dropdown-link href="#" wire:click.prevent="setToday">
+                                    {{ __("Hari ini") }}
+                                </x-dropdown-link>
+                                <x-dropdown-link href="#" wire:click.prevent="setYesterday">
+                                    {{ __("Kemarin") }}
+                                </x-dropdown-link>
+                                <hr class="border-neutral-300 dark:border-neutral-600" />
+                                <x-dropdown-link href="#" wire:click.prevent="setThisWeek">
+                                    {{ __("Minggu ini") }}
+                                </x-dropdown-link>
+                                <x-dropdown-link href="#" wire:click.prevent="setLastWeek">
+                                    {{ __("Minggu lalu") }}
+                                </x-dropdown-link>
+                                <hr class="border-neutral-300 dark:border-neutral-600" />
+                                <x-dropdown-link href="#" wire:click.prevent="setThisMonth">
+                                    {{ __("Bulan ini") }}
+                                </x-dropdown-link>
+                                <x-dropdown-link href="#" wire:click.prevent="setLastMonth">
+                                    {{ __("Bulan lalu") }}
+                                </x-dropdown-link>
+                            </x-slot>
+                        </x-dropdown>
+                    </div>
+                </div>
+                <div class="flex gap-3">
+                    <x-text-input wire:model.live="start_at" type="date" class="w-40" />
+                    <x-text-input wire:model.live="end_at" type="date" class="w-40" />
                 </div>
             </div>
+            <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
             <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">PLANT</label>
-                <x-select wire:model.live="plant" class="mt-1 w-32">
+                <label class="block text-sm font-medium mb-2">{{ __('PLANT') }}</label>
+                <select wire:model.live="plant" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
                     <option value="">All</option>
-                    <option value="A">Plant A</option>
-                    <option value="B">Plant B</option>
-                    <option value="C">Plant C</option>
-                    <option value="D">Plant D</option>
-                    <option value="E">Plant E</option>
-                    <option value="F">Plant F</option>
-                    <option value="G">Plant G</option>
-                    <option value="H">Plant H</option>
-                    <option value="J">Plant J</option>
-                </x-select>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="D">D</option>
+                    <option value="E">E</option>
+                    <option value="F">F</option>
+                    <option value="G">G</option>
+                    <option value="H">H</option>
+                    <option value="I">I</option>
+                    <option value="J">J</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2">{{ __('CONDITION') }}</label>
+                <select wire:model.live="condition" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
+                    <option value="all">All</option>
+                    <option value="hot">Hot</option>
+                    <option value="cold">Cold</option>
+                </select>
             </div>
         </div>
         <div class="text-sm text-gray-600 dark:text-gray-400">
-            <div>Last Updated</div>
+            <div>{{ __('Last Updated') }}</div>
             <div class="font-semibold">{{ $lastUpdated }}</div>
         </div>
     </div>
@@ -224,7 +403,7 @@ new class extends Component {
                         }
 
                         const labels = chartData.labels || [];
-                        const data = chartData.data || [];
+                        const datasets = chartData.datasets || [];
 
                         // Check if Chart.js is loaded
                         if (typeof Chart === 'undefined') {
@@ -232,7 +411,7 @@ new class extends Component {
                         }
 
                         // Check if we have data
-                        if (labels.length === 0 || data.length === 0) {
+                        if (labels.length === 0 || datasets.length === 0) {
                             return;
                         }
 
@@ -260,13 +439,7 @@ new class extends Component {
                                 type: 'bar',
                                 data: {
                                     labels: labels,
-                                    datasets: [{
-                                        label: 'Emergency Counter',
-                                        data: data,
-                                        backgroundColor: 'rgba(239, 68, 68, 0.8)',
-                                        borderColor: 'rgba(239, 68, 68, 1)',
-                                        borderWidth: 1
-                                    }]
+                                    datasets: datasets
                                 },
                                 options: {
                                     indexAxis: 'y',
@@ -274,25 +447,33 @@ new class extends Component {
                                     maintainAspectRatio: false,
                                     plugins: {
                                         legend: {
-                                            display: false
+                                            display: datasets.length > 1,
+                                            position: 'top'
                                         },
                                         tooltip: {
                                             callbacks: {
                                                 label: function(context) {
-                                                    return context.parsed.x + ' counts';
+                                                    return context.dataset.label + ': ' + context.parsed.x + ' counts';
                                                 }
                                             }
                                         }
                                     },
                                     scales: {
                                         x: {
+                                            stacked: datasets.length > 1,
                                             beginAtZero: true,
                                             title: {
                                                 display: true,
                                                 text: 'Counter'
+                                            },
+                                            ticks: {
+                                                callback: function(value) {
+                                                    return value.toLocaleString();
+                                                }
                                             }
                                         },
                                         y: {
+                                            stacked: datasets.length > 1,
                                             title: {
                                                 display: true,
                                                 text: 'Line - Machine'
@@ -311,11 +492,11 @@ new class extends Component {
                     // Watch for data changes
                     $watch('$wire.chartLabels', () => {
                         const labels = $wire.chartLabels || [];
-                        const data = $wire.chartData || [];
+                        const datasets = $wire.chartDatasets || [];
                         
-                        if (labels.length > 0 && data.length > 0) {
+                        if (labels.length > 0 && datasets.length > 0) {
                             $nextTick(() => {
-                                initOrUpdateEmergencyChart({ labels, data });
+                                initOrUpdateEmergencyChart({ labels, datasets });
                             });
                         }
                     });
@@ -323,10 +504,10 @@ new class extends Component {
                     // Initial render if data already exists
                     $nextTick(() => {
                         const labels = $wire.chartLabels || [];
-                        const data = $wire.chartData || [];
+                        const datasets = $wire.chartDatasets || [];
                         
-                        if (labels.length > 0 && data.length > 0) {
-                            initOrUpdateEmergencyChart({ labels, data });
+                        if (labels.length > 0 && datasets.length > 0) {
+                            initOrUpdateEmergencyChart({ labels, datasets });
                         }
                     });
                 "

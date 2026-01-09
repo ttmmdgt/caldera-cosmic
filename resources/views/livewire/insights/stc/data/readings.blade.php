@@ -44,6 +44,7 @@ new class extends Component {
                 "ins_stc_d_sums.*",
                 "ins_stc_d_sums.created_at as d_sum_created_at",
                 "ins_stc_machines.line as machine_line",
+                "ins_stc_machines.std_duration as machine_std_duration",
                 "users.emp_id as user_emp_id",
                 "users.name as user_name",
                 "users.photo as user_photo",
@@ -109,7 +110,6 @@ new class extends Component {
     public function with(): array
     {
         $dSums = $this->getDSumsQuery()->paginate($this->perPage);
-
         return [
             "d_sums" => $dSums,
         ];
@@ -401,7 +401,30 @@ new class extends Component {
                             <td>{!! $d_sum->integrity_friendly() !!}</td>
                             <td>{{ $d_sum->d_sum_created_at }}</td>
                             <td>{{ $d_sum->started_at }}</td>
-                            <td>{{ $d_sum->duration() }}</td>
+                            <td>
+                                @php
+                                    $stdDuration = is_array($d_sum->machine_std_duration) ? $d_sum->machine_std_duration : json_decode($d_sum->machine_std_duration, true);
+                                    $stdMin   = $stdDuration[0] ?? null;
+                                    $stdMax   = $stdDuration[1] ?? null;
+                                    $duration = $d_sum->duration();
+                                    $durationSeconds = null;
+                                    
+                                    // Parse duration string to seconds for comparison
+                                    if (preg_match('/(\d+)m/', $duration, $matches)) {
+                                        $durationSeconds = (int)$matches[1] * 60;
+                                    } elseif (preg_match('/(\d+)s/', $duration, $matches)) {
+                                        $durationSeconds = (int)$matches[1];
+                                    }
+                                    
+                                    $isOverStd = false;
+                                    if ($durationSeconds !== null && $stdMax !== null) {
+                                        $isOverStd = $durationSeconds > $stdMax;
+                                    }
+                                @endphp
+                                <span class="{{ $isOverStd ? 'text-red-600 dark:text-red-400 font-semibold' : '' }}">
+                                    {{ $duration }}
+                                </span>
+                            </td>
                             <td>{{ $d_sum->latency() }}</td>
                             <td>
                                 <div class="flex items-center">

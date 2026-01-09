@@ -37,39 +37,23 @@ class InsBpmDevice extends Model
     }
 
     /**
-     * Validate that lines in config are globally unique
+     * Validate that line is unique
      */
     public function validateUniqueLines()
     {
-        if (!$this->config) {
+        if (!$this->line) {
             return;
         }
 
-        $lines = collect($this->config)->pluck('line')->map(function ($line) {
-            return strtoupper(trim($line));
-        });
-
-        // Check for duplicates within the same device
-        if ($lines->count() !== $lines->unique()->count()) {
-            throw new \InvalidArgumentException('Duplicate lines found within the same device configuration.');
-        }
+        $normalizedLine = strtoupper(trim($this->line));
 
         // Check for global uniqueness across all devices
-        foreach ($lines as $line) {
-            $existingDevice = static::where('id', '!=', $this->id ?? 0)
-                ->get()
-                ->filter(function ($device) use ($line) {
-                    if (!$device->config) return false;
-                    
-                    return collect($device->config)->pluck('line')->map(function ($configLine) {
-                        return strtoupper(trim($configLine));
-                    })->contains($line);
-                })
-                ->first();
+        $existingDevice = static::where('id', '!=', $this->id ?? 0)
+            ->whereRaw('UPPER(TRIM(line)) = ?', [$normalizedLine])
+            ->first();
 
-            if ($existingDevice) {
-                throw new \InvalidArgumentException("Line '{$line}' is already used by device '{$existingDevice->name}'.");
-            }
+        if ($existingDevice) {
+            throw new \InvalidArgumentException("Line '{$this->line}' is already used by device '{$existingDevice->name}'.");
         }
     }
 
@@ -122,13 +106,11 @@ class InsBpmDevice extends Model
      */
     public function getLines(): array
     {
-        if (!$this->config) {
+        if (!$this->line) {
             return [];
         }
 
-        return collect($this->config)->pluck('line')->map(function ($line) {
-            return strtoupper(trim($line));
-        })->toArray();
+        return [strtoupper(trim($this->line))];
     }
 
     /**
@@ -137,13 +119,14 @@ class InsBpmDevice extends Model
     public function getLineConfig(string $line): ?array
     {
         $line = strtoupper(trim($line));
-        if (!$this->config) {
+        $deviceLine = strtoupper(trim($this->line));
+        
+        // Check if this device manages the requested line
+        if ($deviceLine !== $line) {
             return null;
         }
 
-        return collect($this->config)->first(function ($config) use ($line) {
-            return strtoupper(trim($config['line'])) === $line;
-        });
+        return $this->config ?? null;
     }
 
     /**
@@ -151,7 +134,7 @@ class InsBpmDevice extends Model
      */
     public function managesLine(string $line): bool
     {
-        return in_array(strtoupper(trim($line)), $this->getLines());
+        return strtoupper(trim($this->line)) === strtoupper(trim($line));
     }
 
     /**
@@ -182,24 +165,20 @@ class InsBpmDevice extends Model
     }
 
     /**
-     * Get all machines from the config with their standard references
-     * Returns an array of machines from all lines with their standard addresses
+     * Get all machines from the config
+     * Returns an array of machines with their configuration
      */
     public function getMachines(): array
     {
-        if (!$this->config) {
+        if (!$this->config || !isset($this->config['list_machine'])) {
             return [];
         }
 
         $machines = [];
-        foreach ($this->config as $lineConfig) {
-            if (isset($lineConfig['list_mechine'])) {
-                foreach ($lineConfig['list_mechine'] as $machine) {
-                    $machines[] = array_merge($machine, [
-                        'line' => $lineConfig['line'],
-                    ]);
-                }
-            }
+        foreach ($this->config['list_machine'] as $machine) {
+            $machines[] = array_merge($machine, [
+                'line' => $this->line,
+            ]);
         }
 
         return $machines;
@@ -210,57 +189,31 @@ class InsBpmDevice extends Model
      */
     public function getMachineConfig(string $line, string $machineName): ?array
     {
-        $lineConfig = $this->getLineConfig($line);
-        if (!$lineConfig || !isset($lineConfig['list_mechine'])) {
+        // Check if this device manages the requested line
+        if (!$this->managesLine($line)) {
             return null;
         }
 
-        return collect($lineConfig['list_mechine'])->first(function ($machine) use ($machineName) {
+        if (!$this->config || !isset($this->config['list_machine'])) {
+            return null;
+        }
+
+        return collect($this->config['list_machine'])->first(function ($machine) use ($machineName) {
             return $machine['name'] === $machineName;
         });
     }
 
     /**
-     * Get standard values for a machine based on the standard address mapping
-     * This links the machine's standard addresses to InsDwpStandardPV records
+     * Get machine by name
      */
-    public function getMachineStandards(string $line, string $machineName): array
+    public function getMachineByName(string $machineName): ?array
     {
-        $machine = $this->getMachineConfig($line, $machineName);
-        if (!$machine) {
-            return [];
+        if (!$this->config || !isset($this->config['list_machine'])) {
+            return null;
         }
 
-        $standards = [];
-        
-        // Map standard addresses to their corresponding InsDwpStandardPV records
-        // Based on the sample data, machines reference standards by address
-        $standardTypes = [
-            'th_max' => 'addr_std_th_max',
-            'th_min' => 'addr_std_th_min',
-            'side_max' => 'addr_std_side_max',
-            'side_min' => 'addr_std_side_min',
-        ];
-
-        foreach ($standardTypes as $type => $addressKey) {
-            if (isset($machine[$addressKey])) {
-                // You can extend this to lookup InsDwpStandardPV by address or name
-                $standards[$type] = [
-                    'address' => $machine[$addressKey],
-                    'type' => $type,
-                ];
-            }
-        }
-
-        return $standards;
-    }
-
-    /**
-     * Get DWP alarm configuration for a specific line
-     */
-    public function getDwpAlarmConfig(string $line): ?array
-    {
-        $lineConfig = $this->getLineConfig($line);
-        return $lineConfig['dwp_alarm'] ?? null;
+        return collect($this->config['list_machine'])->first(function ($machine) use ($machineName) {
+            return $machine['name'] === $machineName;
+        });
     }
 }

@@ -91,7 +91,7 @@ new #[Layout("layouts.app")] class extends Component {
                                     {{ $device->ip_address }}
                                 </td>
                                 <td>
-                                    {{ count($device->getLines()) }}
+                                    {{ $device->line }}
                                 </td>
                                 <td>
                                     @if($device->is_active)

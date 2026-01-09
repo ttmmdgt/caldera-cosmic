@@ -698,7 +698,7 @@ new #[Layout("layouts.app")] class extends Component {
     </div>
 
     <!-- Today's Summary -->
-    <div class="bg-gradient-to-r from-blue-500 to-blue-600 dark:from-blue-700 dark:to-blue-800 rounded-lg shadow-lg p-6 text-white">
+    <div class="bg-gradient-to-r from-gray-500 to-white-600 dark:from-gray-700 dark:to-gray-800 rounded-lg shadow-lg p-6 text-white">
         <div class="flex items-center justify-between mb-4">
             <div>
                 <h3 class="text-2xl font-bold">
@@ -722,10 +722,10 @@ new #[Layout("layouts.app")] class extends Component {
                     @endif
                 </p>
                 @if(($todaySummary['total_tracked_seconds'] ?? 0) == 0)
-                    <p class="text-yellow-200 text-xs mt-1">⚠️ {{ __('Belum ada data tracking untuk periode ini') }}</p>
+                    <p class="text-yellow-200 text-xs mt-1">{{ __('Belum ada data tracking untuk periode ini') }}</p>
                 @else
                     <p class="text-blue-100 text-xs mt-1">
-                        📊 {{ __('Total Logs') }}: {{ ($todaySummary['online_count'] ?? 0) + ($todaySummary['offline_count'] ?? 0) + ($todaySummary['timeout_count'] ?? 0) }}
+                        {{ __('Total Logs') }}: {{ ($todaySummary['online_count'] ?? 0) + ($todaySummary['offline_count'] ?? 0) + ($todaySummary['timeout_count'] ?? 0) }}
                     </p>
                 @endif
             </div>
@@ -739,7 +739,7 @@ new #[Layout("layouts.app")] class extends Component {
             <!-- Online Summary -->
             <div class="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 border border-white border-opacity-30">
                 <div class="flex items-center gap-3 mb-3">
-                    <div class="p-2 bg-green-500 rounded-lg">
+                    <div class="p-2 bg-neutral-500 rounded-lg">
                         <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
@@ -761,7 +761,7 @@ new #[Layout("layouts.app")] class extends Component {
             <!-- Offline Summary -->
             <div class="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 border border-white border-opacity-30">
                 <div class="flex items-center gap-3 mb-3">
-                    <div class="p-2 bg-red-500 rounded-lg">
+                    <div class="p-2 bg-neutral-500 rounded-lg">
                         <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
@@ -783,7 +783,7 @@ new #[Layout("layouts.app")] class extends Component {
             <!-- Timeout Summary -->
             <div class="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 border border-white border-opacity-30">
                 <div class="flex items-center gap-3 mb-3">
-                    <div class="p-2 bg-yellow-500 rounded-lg">
+                    <div class="p-2 bg-neutral-500 rounded-lg">
                         <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>

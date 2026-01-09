@@ -18,6 +18,7 @@ new class extends Component {
     public array $at_adjust_strength = [];
     public array $section_limits_high = [];
     public array $section_limits_low = [];
+    public array $std_duration = [];
 
     public function rules()
     {
@@ -36,6 +37,8 @@ new class extends Component {
             "section_limits_high.*" => ["numeric", "min:30", "max:99"],
             "section_limits_low" => ["array", "size:8"],
             "section_limits_low.*" => ["numeric", "min:30", "max:99"],
+            "std_duration" => ["array", "size:2"],
+            "std_duration.*" => ["required", "integer", "min:1", "max:9999"],
         ];
     }
 
@@ -50,9 +53,10 @@ new class extends Component {
             $this->line = $machine->line;
             $this->ip_address = $machine->ip_address;
             $this->is_at_adjusted = $machine->is_at_adjusted;
-            $this->at_adjust_strength = $machine->at_adjust_strength ?? ["upper" => [0, 0, 0, 0, 0, 0, 0, 0], "lower" => [0, 0, 0, 0, 0, 0, 0, 0]];
-            $this->section_limits_high = $machine->section_limits_high ?? [83, 78, 73, 68, 63, 58, 53, 48];
-            $this->section_limits_low = $machine->section_limits_low ?? [73, 68, 63, 58, 53, 48, 43, 38];
+            $this->at_adjust_strength = is_array($machine->at_adjust_strength) ? $machine->at_adjust_strength : ["upper" => [0, 0, 0, 0, 0, 0, 0, 0], "lower" => [0, 0, 0, 0, 0, 0, 0, 0]];
+            $this->section_limits_high = is_array($machine->section_limits_high) ? $machine->section_limits_high : [83, 78, 73, 68, 63, 58, 53, 48];
+            $this->section_limits_low = is_array($machine->section_limits_low) ? $machine->section_limits_low : [73, 68, 63, 58, 53, 48, 43, 38];
+            $this->std_duration = $machine->std_duration ? (is_array($machine->std_duration) ? $machine->std_duration : json_decode($machine->std_duration, true)) : [60, 60];
 
             $this->resetValidation();
         } else {
@@ -87,6 +91,7 @@ new class extends Component {
                 "at_adjust_strength" => $validated["at_adjust_strength"],
                 "section_limits_high" => $validated["section_limits_high"],
                 "section_limits_low" => $validated["section_limits_low"],
+                "std_duration" => $validated["std_duration"],
             ]);
 
             $this->js('$dispatch("close")');
@@ -491,6 +496,23 @@ new class extends Component {
                 <x-input-error messages="{{ $message }}" class="px-3 mt-2" />
             @enderror
         </div>
+
+        <div class="mt-6">
+            <h2 class="font-medium text-neutral-900 dark:text-neutral-100 mb-3">
+                {{ __("Durasi Standar") }}
+            </h2>
+            <div class="mb-3 mt-2">
+                <label class="block text-xs uppercase text-neutral-500">{{ __("Durasi Standar Operasi (detik)") }}</label>
+                <div class="grid grid-cols-4 gap-2 mt-2">
+                    <x-text-input-t class="text-center" placeholder="60" wire:model="std_duration.0" type="number" min="1" :disabled="Gate::denies('manage', InsStcMachine::class)" />
+                    <x-text-input-t class="text-center" placeholder="60" wire:model="std_duration.1" type="number" min="1" :disabled="Gate::denies('manage', InsStcMachine::class)" />
+                </div>
+            </div>
+            @error("std_duration.*")
+                <x-input-error messages="{{ $message }}" class="px-3 mt-2" />
+            @enderror
+        </div>
+
         @can("manage", InsStcMachine::class)
             <div class="mt-6 flex justify-end">
                 <x-primary-button type="submit">

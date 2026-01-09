@@ -233,16 +233,6 @@ new #[Layout("layouts.app")] class extends Component {
                 $current->addDay();
             }
 
-            // Color palette for different lines
-            $colors = [
-                'rgba(59, 130, 246, 0.6)',   // Blue
-                'rgba(16, 185, 129, 0.6)',   // Green  
-                'rgba(245, 101, 101, 0.6)',  // Red
-                'rgba(251, 191, 36, 0.6)',   // Yellow
-                'rgba(139, 92, 246, 0.6)',   // Purple
-                'rgba(236, 72, 153, 0.6)',   // Pink
-            ];
-
             foreach ($lines as $index => $line) {
                 $lineData = [];
                 
@@ -255,14 +245,13 @@ new #[Layout("layouts.app")] class extends Component {
                     $lineData[] = $dailyCount;
                 }
 
-                $color = $colors[$index % count($colors)];
-                $borderColor = str_replace('0.6', '1', $color);
+                $colors = $this->getLineColor($line);
 
                 $datasets[] = [
                     'label' => $line,
                     'data' => $lineData,
-                    'backgroundColor' => $color,
-                    'borderColor' => $borderColor,
+                    'backgroundColor' => $colors['background'],
+                    'borderColor' => $colors['border'],
                     'borderWidth' => 2,
                     'tension' => 0.4,
                 ];
@@ -272,16 +261,6 @@ new #[Layout("layouts.app")] class extends Component {
             for ($hour = 6; $hour <= 17; $hour++) {
                 $dates[] = sprintf('%02d:00', $hour);
             }
-
-            // Color palette for different lines
-            $colors = [
-                'rgba(59, 130, 246, 0.6)',   // Blue
-                'rgba(16, 185, 129, 0.6)',   // Green  
-                'rgba(245, 101, 101, 0.6)',  // Red
-                'rgba(251, 191, 36, 0.6)',   // Yellow
-                'rgba(139, 92, 246, 0.6)',   // Purple
-                'rgba(236, 72, 153, 0.6)',   // Pink
-            ];
 
             foreach ($lines as $index => $line) {
                 $lineData = [];
@@ -295,14 +274,13 @@ new #[Layout("layouts.app")] class extends Component {
                     $lineData[] = $hourlyCount;
                 }
 
-                $color = $colors[$index % count($colors)];
-                $borderColor = str_replace('0.6', '1', $color);
+                $colors = $this->getLineColor($line);
 
                 $datasets[] = [
                     'label' => $line,
                     'data' => $lineData,
-                    'backgroundColor' => $color,
-                    'borderColor' => $borderColor,
+                    'backgroundColor' => $colors['background'],
+                    'borderColor' => $colors['border'],
                     'borderWidth' => 2,
                     'tension' => 0.4,
                 ];
@@ -313,6 +291,45 @@ new #[Layout("layouts.app")] class extends Component {
             'labels' => $dates,
             'datasets' => $datasets
         ];
+    }
+
+    /**
+     * Helper function to get colors for the chart lines
+     */
+    private function getLineColor($line)
+    {
+        switch (strtoupper($line)) {
+            case 'G1': 
+                return [
+                    'background' => 'rgba(239, 68, 68, 0.6)',   // red with opacity
+                    'border' => 'rgba(239, 68, 68, 1)'           // red solid
+                ];
+            case 'G2': 
+                return [
+                    'background' => 'rgba(59, 130, 246, 0.6)',   // blue with opacity
+                    'border' => 'rgba(59, 130, 246, 1)'          // blue solid
+                ];
+            case 'G3': 
+                return [
+                    'background' => 'rgba(34, 197, 94, 0.6)',    // green with opacity
+                    'border' => 'rgba(34, 197, 94, 1)'           // green solid
+                ];
+            case 'G4': 
+                return [
+                    'background' => 'rgba(249, 115, 22, 0.6)',   // orange with opacity
+                    'border' => 'rgba(249, 115, 22, 1)'          // orange solid
+                ];
+            case 'G5': 
+                return [
+                    'background' => 'rgba(168, 85, 247, 0.6)',   // purple with opacity
+                    'border' => 'rgba(168, 85, 247, 1)'          // purple solid
+                ];
+            default: 
+                return [
+                    'background' => 'rgba(107, 114, 128, 0.6)',  // gray with opacity
+                    'border' => 'rgba(107, 114, 128, 1)'         // gray solid
+                ];
+        }
     }
 
     #[On("updated")]

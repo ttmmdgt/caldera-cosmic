@@ -87,6 +87,7 @@ new #[Layout("layouts.app")] class extends Component {
                             <th>{{ __("Line") }}</th>
                             <th>{{ __("Alamat IP") }}</th>
                             <th colspan="2">{{ __("Penyetelan AT") }}</th>
+                            <th>{{ __("Durasi Standar") }}</th>
                         </tr>
                         @foreach ($machines as $machine)
                             <tr
@@ -119,6 +120,36 @@ new #[Layout("layouts.app")] class extends Component {
                                         <div class="text-xs">
                                             <div>{{ implode(",", $machine->at_adjust_strength["upper"] ?? []) }}</div>
                                             <div>{{ implode(",", $machine->at_adjust_strength["lower"] ?? []) }}</div>
+                                        </div>
+                                    @else
+                                        <span class="text-neutral-400">-</span>
+                                    @endif
+                                </td>
+                                <td>
+                                    @php
+                                        $durationStd = is_array($machine->std_duration) ? $machine->std_duration : json_decode($machine->std_duration, true);
+                                        
+                                        if (isset($durationStd[0])) {
+                                            $minSeconds = $durationStd[0];
+                                            $minFormatted = $minSeconds >= 60 
+                                                ? round($minSeconds / 60) . 'm' 
+                                                : $minSeconds . 's';
+                                        } else {
+                                            $minFormatted = '-';
+                                        }
+                                        
+                                        if (isset($durationStd[1])) {
+                                            $maxSeconds = $durationStd[1];
+                                            $maxFormatted = $maxSeconds >= 60 
+                                                ? round($maxSeconds / 60) . 'm' 
+                                                : $maxSeconds . 's';
+                                        } else {
+                                            $maxFormatted = '-';
+                                        }
+                                    @endphp
+                                    @if ($durationStd && is_array($durationStd))
+                                        <div class="text-xs">
+                                            <div>{{ $minFormatted }} - {{ $maxFormatted }}</div>
                                         </div>
                                     @else
                                         <span class="text-neutral-400">-</span>

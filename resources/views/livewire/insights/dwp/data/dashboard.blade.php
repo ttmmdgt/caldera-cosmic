@@ -737,9 +737,7 @@ new class extends Component {
 
         if (!$device) {
             return [
-                'percentages' => ['online' => 0, 'offline' => 50, 'timeout' => 50],
-                'total_hours' => 0,
-                'full_time_format' => "0 hours 0 minutes 0 seconds",
+            'percentages' => ['online' => 0, 'offline' => 0, 'timeout' => 0],
                 'offline_time_format' => "0 hours 0 minutes 0 seconds",
                 'timeout_time_format' => "0 hours 0 minutes 0 seconds"
             ];
@@ -759,9 +757,7 @@ new class extends Component {
 
         if ($logs->isEmpty()) {
             return [
-                'percentages' => ['online' => 0, 'offline' => 50, 'timeout' => 50],
-                'total_hours' => 0,
-                'full_time_format' => "0 hours 0 minutes 0 seconds",
+            'percentages' => ['online' => 0, 'offline' => 0, 'timeout' => 0],
                 'offline_time_format' => "0 hours 0 minutes 0 seconds",
                 'timeout_time_format' => "0 hours 0 minutes 0 seconds"
             ];
@@ -829,7 +825,7 @@ new class extends Component {
     private function calculateMonitoringPercentages(int $totalDuration, int $onlineDuration, int $offlineDuration, int $timeoutDuration): array
     {
         if ($totalDuration <= 0) {
-            return ['online' => 0, 'offline' => 50, 'timeout' => 50];
+            return ['online' => 0, 'offline' => 0, 'timeout' => 0];
         }
 
         $onlinePercentage = ($onlineDuration / $totalDuration) * 100;
@@ -1107,7 +1103,9 @@ new class extends Component {
                                 <div>
                                     <h2 class="text-md text-neutral-600 dark:text-neutral-400">Output</h2>
                                     <div class="p-2 rounded-md bg-gray-100 dark:bg-neutral-900 font-bold text-lg text-neutral-700 dark:text-neutral-200">
-                                        {{ $machine['output']['left'] ?? 0 }} pairs
+                                        Left : {{ $machine['output']['left'] ?? 0 }} EA
+                                        |
+                                        Right : {{ $machine['output']['right'] ?? 0 }} EA
                                     </div>
                                 </div>
                             </div>

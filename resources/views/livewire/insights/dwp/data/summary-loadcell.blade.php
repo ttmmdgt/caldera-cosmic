@@ -628,33 +628,33 @@ new #[Layout("layouts.app")] class extends Component {
 
             @foreach($groupedByPlant as $plant => $rows)
                 <div class="mb-8">
-                    <div class="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
-                        <table class="min-w-full divide-y divide-neutral-200 dark:divide-neutral-700">
-                            <thead class="bg-neutral-50 dark:bg-neutral-900">
+                    <div class="overflow-x-auto overflow-y-auto max-h-[600px] rounded-lg border border-neutral-200 dark:border-neutral-700">
+                        <table class="table-auto min-w-full divide-y divide-neutral-200 dark:divide-neutral-700">
+                            <thead class="bg-neutral-50 dark:bg-neutral-900 sticky top-0 z-10">
                                 {{-- Row 1: Plant, Line, Timestamp, Machine Headers --}}
-                                <tr>
-                                    <th rowspan="2" class="px-3 py-2 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
+                                <tr class="bg-neutral-50 dark:bg-neutral-900">
+                                    <th rowspan="2" class="sticky left-0 z-20 bg-neutral-50 dark:bg-neutral-900 px-5 py-4 text-left text-base font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
                                         {{ __("Plant") }}
                                     </th>
-                                    <th rowspan="2" class="px-3 py-2 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
+                                    <th rowspan="2" class="sticky left-[100px] z-20 bg-neutral-50 dark:bg-neutral-900 px-5 py-4 text-left text-base font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
                                         {{ __("Line") }}
                                     </th>
-                                    <th rowspan="2" class="px-3 py-2 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
+                                    <th rowspan="2" class="sticky left-[180px] z-20 bg-neutral-50 dark:bg-neutral-900 px-5 py-4 text-left text-base font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-700">
                                         {{ __("Timestamp") }}
                                     </th>
                                     @foreach(['1', '2', '3', '4'] as $mc)
-                                        <th colspan="6" class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider {{ $mc !== '4' ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                        <th  colspan="6" class="min-w-[400px] px-4 py-4 text-center text-base font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider {{ $mc !== '4' ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
                                             {{ __("Machine") }} {{ $mc }}
                                         </th>
                                     @endforeach
                                 </tr>
                                 {{-- Row 2: Left/Right sub-headers --}}
-                                <tr>
+                                <tr class="bg-neutral-100 dark:bg-neutral-800">
                                     @foreach(['1', '2', '3', '4'] as $mc)
-                                        <th colspan="3" class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase border-r border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800">
+                                        <th colspan="3" class="px-4 py-4 text-center text-base font-semibold text-neutral-500 dark:text-neutral-400 uppercase border-r border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800">
                                             {{ __("Left") }}
                                         </th>
-                                        <th colspan="3" class="px-2 py-2 text-center text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase {{ $mc !== '4' ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }} bg-neutral-100 dark:bg-neutral-800">
+                                        <th colspan="3" class="px-4 py-4 text-center text-base font-semibold text-neutral-500 dark:text-neutral-400 uppercase {{ $mc !== '4' ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }} bg-neutral-100 dark:bg-neutral-800">
                                             {{ __("Right") }}
                                         </th>
                                     @endforeach
@@ -670,13 +670,13 @@ new #[Layout("layouts.app")] class extends Component {
                                     
                                     {{-- Row 1: Toe values --}}
                                     <tr class="border-t-2 border-neutral-300 dark:border-neutral-600">
-                                        <td rowspan="4" class="px-3 py-2 whitespace-nowrap text-sm font-medium text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700 align-middle">
+                                        <td rowspan="4" class="sticky left-0 z-10 bg-white dark:bg-neutral-800 px-5 py-6 whitespace-nowrap text-lg font-semibold text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700 align-middle min-w-[100px]">
                                             {{ $row['plant'] }}
                                         </td>
-                                        <td rowspan="4" class="px-3 py-2 whitespace-nowrap text-sm text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700 align-middle">
+                                        <td rowspan="4" class="sticky left-[100px] z-10 bg-white dark:bg-neutral-800 px-5 py-6 whitespace-nowrap text-lg font-semibold text-neutral-900 dark:text-neutral-100 border-r border-neutral-200 dark:border-neutral-700 align-middle min-w-[80px]">
                                             {{ $row['line'] }}
                                         </td>
-                                        <td rowspan="4" class="px-3 py-2 whitespace-nowrap text-xs text-neutral-600 dark:text-neutral-400 font-mono border-r border-neutral-200 dark:border-neutral-700 align-middle">
+                                        <td rowspan="4" class="sticky left-[180px] z-10 bg-white dark:bg-neutral-800 px-5 py-6 whitespace-nowrap text-base text-neutral-600 dark:text-neutral-400 font-mono border-r border-neutral-200 dark:border-neutral-700 align-middle min-w-[120px]">
                                             {{ \Carbon\Carbon::parse($row['latest_timestamp'])->format('m-d-Y') }}
                                         </td>
                                         @foreach($machines as $mc)
@@ -690,8 +690,9 @@ new #[Layout("layouts.app")] class extends Component {
                                                         $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
                                                     }
                                                 @endphp
-                                                <td colspan="3" class="px-2 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $toeValue ?? '—' }}
+                                                <td colspan="3" class="px-4 py-5 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">TOE</div>
+                                                    <div class="font-bold text-xl">{{ $toeValue ?? '—' }}</div>
                                                 </td>
                                             @endforeach
                                         @endforeach
@@ -712,14 +713,17 @@ new #[Layout("layouts.app")] class extends Component {
                                                         $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
                                                     }
                                                 @endphp
-                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $m1 ?? '—' }}
+                                                <td class="px-4 py-4 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700 min-w-[70px]">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">M1</div>
+                                                    <div class="font-bold text-xl">{{ $m1 ?? '—' }}</div>
                                                 </td>
-                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $c1 ?? '—' }}
+                                                <td class="px-4 py-4 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700 min-w-[70px]">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">C1</div>
+                                                    <div class="font-bold text-xl">{{ $c1 ?? '—' }}</div>
                                                 </td>
-                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $l1 ?? '—' }}
+                                                <td class="px-4 py-4 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }} min-w-[70px]">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">L1</div>
+                                                    <div class="font-bold text-xl">{{ $l1 ?? '—' }}</div>
                                                 </td>
                                             @endforeach
                                         @endforeach
@@ -740,14 +744,17 @@ new #[Layout("layouts.app")] class extends Component {
                                                         $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
                                                     }
                                                 @endphp
-                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $m2 ?? '—' }}
+                                                <td class="px-4 py-4 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700 min-w-[70px]">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">M2</div>
+                                                    <div class="font-bold text-xl">{{ $m2 ?? '—' }}</div>
                                                 </td>
-                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $c2 ?? '—' }}
+                                                <td class="px-4 py-4 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} border-r border-neutral-100 dark:border-neutral-700 min-w-[70px]">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">C2</div>
+                                                    <div class="font-bold text-xl">{{ $c2 ?? '—' }}</div>
                                                 </td>
-                                                <td class="px-1 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $l2 ?? '—' }}
+                                                <td class="px-4 py-4 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }} min-w-[70px]">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">L2</div>
+                                                    <div class="font-bold text-xl">{{ $l2 ?? '—' }}</div>
                                                 </td>
                                             @endforeach
                                         @endforeach
@@ -766,8 +773,9 @@ new #[Layout("layouts.app")] class extends Component {
                                                         $bgClass = 'bg-yellow-100 dark:bg-yellow-900/30';
                                                     }
                                                 @endphp
-                                                <td colspan="3" class="px-2 py-1 text-center text-xs text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
-                                                    <span class="text-neutral-500 dark:text-neutral-400"></span>{{ $heelValue ?? '—' }}
+                                                <td colspan="3" class="px-4 py-5 text-center text-sm text-neutral-700 dark:text-neutral-300 {{ $bgClass }} {{ ($mc !== '4' || $pos !== 'R') ? 'border-r border-neutral-200 dark:border-neutral-700' : '' }}">
+                                                    <div class="text-xs text-neutral-500 dark:text-neutral-400 mb-1">Heel</div>
+                                                    <div class="font-bold text-xl">{{ $heelValue ?? '—' }}</div>
                                                 </td>
                                             @endforeach
                                         @endforeach
@@ -784,5 +792,4 @@ new #[Layout("layouts.app")] class extends Component {
             </div>
         @endif
     </div>
-     
 </div>

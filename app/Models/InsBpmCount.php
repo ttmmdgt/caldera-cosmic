@@ -34,5 +34,15 @@ class InsBpmCount extends Model
             $count->machine = strtoupper(trim($count->machine));
         });
     }
+
+    /**
+     * Get the latest count for a specific line
+     */
+    public static function latestForLine(string $line): ?static
+    {
+        return static::where('line', strtoupper(trim($line)))
+            ->latest('created_at')
+            ->first();
+    }
 }
 

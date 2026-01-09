@@ -24,6 +24,7 @@ new #[Layout("layouts.app")] class extends Component {
             "comparison" => __("Perbandingan"),
             "machine-performance" => __("Performa mesin"),
             "deviation-tracking" => __("Pelacakan deviasi"),
+            "deviation-duration-tracking" => __("Pelacakan durasi deviasi"),
             "target-variance" => __("Varians target"),
             // 'zone-analysis'         => __('Analisis zona'),
             // 'trend-analysis'        => __('Analisis tren'),
@@ -39,6 +40,7 @@ new #[Layout("layouts.app")] class extends Component {
             "comparison" => "icon-git-compare",
             "machine-performance" => "icon-zap",
             "deviation-tracking" => "icon-scan-search",
+            "deviation-duration-tracking" => "icon-timer",
             "target-variance" => "icon-focus",
         ];
     }
@@ -123,6 +125,10 @@ new #[Layout("layouts.app")] class extends Component {
                 @break
             @case("deviation-tracking")
                 <livewire:insights.stc.data.deviation-tracking />
+
+                @break
+            @case("deviation-duration-tracking")
+                <livewire:insights.stc.data.deviation-duration-tracking />
 
                 @break
             @case("machine-performance")

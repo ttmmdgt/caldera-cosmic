@@ -11,6 +11,7 @@ new class extends Component {
     public string $ip_address = "";
     public bool $is_active = true;
     public array $machines = [];
+    public int $addr_reset = 0;
 
     public function mount()
     {
@@ -25,6 +26,7 @@ new class extends Component {
             "line" => ["required", "string", "min:1", "max:50", Rule::unique('ins_bpm_devices', 'line')],
             "ip_address" => ["required", "ip", Rule::unique('ins_bpm_devices', 'ip_address')],
             "is_active" => ["boolean"],
+            "addr_reset" => ["required", "integer", "min:0"],
             "machines" => ["required", "array", "min:1"],
             "machines.*.name" => ["required", "string", "max:50"],
             "machines.*.addr_hot" => ["required", "integer", "min:0"],
@@ -65,9 +67,9 @@ new class extends Component {
                     "addr_hot" => (int)$machine["addr_hot"],
                     "addr_cold" => (int)$machine["addr_cold"],
                 ];
-            }, $validated["machines"])
+            }, $validated["machines"]),
+            "addr_reset" => (int)$this->addr_reset,
         ];
-
         $device->fill([
             "name" => $validated["name"],
             "line" => $validated["line"],
@@ -87,7 +89,7 @@ new class extends Component {
 
     public function customReset()
     {
-        $this->reset(["name", "line", "ip_address", "is_active", "machines"]);
+        $this->reset(["name", "line", "ip_address", "is_active", "machines", "addr_reset"]);
         $this->is_active = true;
         $this->addMachine(); // Add one machine by default
     }
@@ -123,7 +125,13 @@ new class extends Component {
                 <x-input-error messages="{{ $message }}" class="px-3 mt-2" />
             @enderror
         </div>
-        
+        <div class="mt-6">
+            <label for="addr_reset" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Reset Address") }}</label>
+            <x-text-input id="addr_reset" wire:model="addr_reset" type="number" placeholder="0" />
+            @error("addr_reset")
+                <x-input-error messages="{{ $message }}" class="px-3 mt-2" />
+            @enderror
+        </div>
         <!-- Machine Configuration Section -->
         <div class="mt-6">
             <div class="flex justify-between items-center mb-3">

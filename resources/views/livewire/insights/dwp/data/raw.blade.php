@@ -33,6 +33,9 @@ new #[Layout("layouts.app")] class extends Component {
     #[Url]
     public string $presstime = "";
 
+    #[Url]
+    public string $status = "";
+
     public array $devices = [];
     public int $perPage = 20;
     public string $view = "raw";
@@ -208,13 +211,13 @@ new #[Layout("layouts.app")] class extends Component {
                 // Duration less than 10 seconds
                 $query->whereRaw("TIME_TO_SEC(duration) < 10");
                 break;
-            case '<13':
-                // Duration less than 13 seconds
-                $query->whereRaw("TIME_TO_SEC(duration) < 13");
+            case '10-13':
+                // Duration greater than 10 and less than 13 seconds
+                $query->whereRaw("TIME_TO_SEC(duration) > 9 AND TIME_TO_SEC(duration) < 13");
                 break;
-            case '13-14':
-                // Duration between 13 and 14 seconds
-                $query->whereRaw("TIME_TO_SEC(duration) BETWEEN 13 AND 14");
+            case '13-16':
+                // Duration between 13 and 16 seconds
+                $query->whereRaw("TIME_TO_SEC(duration) BETWEEN 13 AND 16");
                 break;
             case '>16':
                 // Duration 16 seconds or more
@@ -266,7 +269,55 @@ new #[Layout("layouts.app")] class extends Component {
     #[On("updated")]
     public function with(): array
     {
-        $counts = $this->getCountsQuery()->paginate($this->perPage);
+        $query = $this->getCountsQuery();
+        
+        // If status filter is applied, we need to filter based on pressure value ranges
+        if ($this->status) {
+            $allCounts = $query->get();
+            $filteredCounts = $allCounts->filter(function($count) {
+                $pv = json_decode($count->pv, true);
+                if (!isset($pv['waveforms']) || !isset($pv['timestamps'])) {
+                    return false;
+                }
+                
+                // Use repeatWaveform to match the display calculation
+                $toeHeelArray = $this->repeatWaveform($pv['waveforms'][0] ?? [], $pv['timestamps'] ?? [], (int)($count->duration ?? 0));
+                $sideArray = $this->repeatWaveform($pv['waveforms'][1] ?? [], $pv['timestamps'] ?? [], (int)($count->duration ?? 0));
+                
+                // Match chart calculation: merge arrays and get median (not max of separate medians)
+                $allPressureValues = array_merge($toeHeelArray, $sideArray);
+                $medianPressure = $this->getMedian($allPressureValues);
+                
+                // Filter based on pressure ranges - matching chart categories exactly
+                switch ($this->status) {
+                    case '<20':
+                        return $medianPressure < 20;
+                    case '<30':
+                        // Warning category: >= 20 AND < 30
+                        return $medianPressure >= 20 && $medianPressure < 30;
+                    case '30-45':
+                        return $medianPressure >= 30 && $medianPressure <= 45;
+                    case '>45':
+                        return $medianPressure > 45;
+                    default:
+                        return true;
+                }
+            });
+            
+            // Manual pagination
+            $currentPage = $this->getPage();
+            $items = $filteredCounts->forPage($currentPage, $this->perPage);
+            $counts = new \Illuminate\Pagination\LengthAwarePaginator(
+                $items,
+                $filteredCounts->count(),
+                $this->perPage,
+                $currentPage,
+                ['path' => request()->url(), 'query' => request()->query()]
+            );
+        } else {
+            $counts = $query->paginate($this->perPage);
+        }
+        
         return [
             "counts" => $counts,
         ];
@@ -350,12 +401,15 @@ new #[Layout("layouts.app")] class extends Component {
 
                 $columns = [
                     __("Line"),
-                    __("Cumulative"),
+                    __("Position"),
                     __("Machine"),
                     __("Duration"),
+                    __("Toe/Heel"),
+                    __("Side"),
+                    __("Result"),
+                    __("Result Duration"),
                     __("Created At"),
                 ];
-
                 $callback = function () use ($columns) {
                     $file = fopen("php://output", "w");
                     fputcsv($file, $columns);
@@ -363,11 +417,54 @@ new #[Layout("layouts.app")] class extends Component {
                     $this->getCountsQuery()->chunk(1000, function ($counts) use ($file) {
                         foreach ($counts as $count) {
                             $device = $this->getDeviceForLine($count->line);
+                            $pv = json_decode($count->pv, true)['waveforms'];
+                            $toe = $this->getMedian($pv[0]);
+                            $side = $this->getMedian($pv[1]);
+                            
+                            // Get standards specific to this count's line and machine
+                            $standards = $this->getStandardsForCount($count->line, $count->mechine);
+                            
+                            $resultToe = $this->compareWithStandards($toe, $standards['th']);
+                            $resultSide = $this->compareWithStandards($side, $standards['side']);
+                            $resultToe = $resultToe['is_standard'] == true ? "standard" : "non-standard";
+                            $resultSide = $resultSide['is_standard'] == true ? "standard" : "non-standard";
+                            $finallResult = "standard";
+                            // jika salah satu not standar maka = "non-standard"
+                            if ($resultToe === "non-standard" || $resultSide === "non-standard") {
+                                $finallResult = "non-standard";
+                            }
+                            
+                            // Calculate duration in seconds
+                            $resultFinalDuration = "";
+                            if (!empty($count->duration)) {
+                                try {
+                                    $durationCarbon = Carbon::parse($count->duration);
+                                    $durationSeconds = ($durationCarbon->hour ?? 0) * 3600 + ($durationCarbon->minute ?? 0) * 60 + ($durationCarbon->second ?? 0);
+                                    
+                                    // Categorize based on seconds (4 conditions only)
+                                    if ($durationSeconds < 10) {
+                                        $resultFinalDuration = "too_early";
+                                    } elseif ($durationSeconds >= 10 && $durationSeconds < 13) {
+                                        $resultFinalDuration = "early";
+                                    } elseif ($durationSeconds >= 13 && $durationSeconds <= 16) {
+                                        $resultFinalDuration = "on_time";
+                                    } else {
+                                        $resultFinalDuration = "late";
+                                    }
+                                } catch (\Exception $e) {
+                                    $resultFinalDuration = "unknown";
+                                }
+                            }
+
                             fputcsv($file, [
                                 $count->line,
-                                $count->cumulative,
+                                $count->position,
                                 $count->mechine,
                                 $count->duration,
+                                $toe,
+                                $side,
+                                $finallResult,
+                                $resultFinalDuration,
                                 $count->created_at,
                             ]);
                         }
@@ -516,7 +613,7 @@ new #[Layout("layouts.app")] class extends Component {
             <div class="grid grid-cols-2 lg:flex gap-3">
                 <div>
                     <label class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Line") }}</label>
-                    <x-select wire:model.live="line" class="w-full lg:w-32">
+                    <x-select wire:model.live="line" class="w-full lg:w-24">
                             <option value=""></option>
                             <option value="a1">A1</option>
                             <option value="g5">G5</option>
@@ -524,7 +621,7 @@ new #[Layout("layouts.app")] class extends Component {
                 </div>
                 <div>
                     <label class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Machine") }}</label>
-                    <x-select wire:model.live="mechine" class="w-full lg:w-32">
+                    <x-select wire:model.live="mechine" class="w-full lg:w-24">
                             <option value=""></option>
                             <option value="1">1</option>
                             <option value="2">2</option>
@@ -534,12 +631,22 @@ new #[Layout("layouts.app")] class extends Component {
                 </div>
                 <div>
                     <label class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Press Time") }}</label>
-                    <x-select wire:model.live="presstime" class="w-full lg:w-32">
+                    <x-select wire:model.live="presstime" class="w-full lg:w-24">
                             <option value="">{{ __("All") }}</option>
                             <option value="<10">{{ __("<10") }}</option>
-                            <option value="<13">{{ __("<13") }}</option>
-                            <option value="13-14">{{ __("13-14") }}</option>
+                            <option value="10-13">{{ __("10-13") }}</option>
+                            <option value="13-16">{{ __("13-16") }}</option>
                             <option value=">16">{{ __(">16") }}</option>
+                    </x-select>
+                </div>
+                <div>
+                    <label class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Pressure") }}</label>
+                    <x-select wire:model.live="status" class="w-full lg:w-24">
+                            <option value="">{{ __("All") }}</option>
+                            <option value="<20">{{ __("<20kg") }}</option>
+                            <option value="<30">{{ __("<30kg") }}</option>
+                            <option value="30-45">{{ __("30-45kg") }}</option>
+                            <option value=">45">{{ __(">45kg") }}</option>
                     </x-select>
                 </div>
             </div>

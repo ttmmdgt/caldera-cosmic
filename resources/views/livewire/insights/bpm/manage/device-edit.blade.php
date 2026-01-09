@@ -12,6 +12,7 @@ new class extends Component {
     public string $line = "";
     public string $ip_address = "";
     public bool $is_active = true;
+    public int  $addr_reset = 0;
     public array $machines = [];
 
     public function rules()
@@ -21,6 +22,7 @@ new class extends Component {
             "line" => ["required", "string", "min:1", "max:50", Rule::unique('ins_bpm_devices', 'line')->ignore($this->id)],
             "ip_address" => ["required", "ip", Rule::unique('ins_bpm_devices', 'ip_address')->ignore($this->id)],
             "is_active" => ["boolean"],
+            "addr_reset" => ["required", "integer", "min:0"],
             "machines" => ["required", "array", "min:1"],
             "machines.*.name" => ["required", "string", "max:50"],
             "machines.*.addr_hot" => ["required", "integer", "min:0"],
@@ -38,6 +40,7 @@ new class extends Component {
             $this->line = $device->line;
             $this->ip_address = $device->ip_address;
             $this->is_active = $device->is_active;
+            $this->addr_reset = $device->config['addr_reset'] ?? 0;
             
             // Load machines from config
             if ($device->config && isset($device->config['list_mechine'])) {
@@ -85,7 +88,8 @@ new class extends Component {
                         "addr_hot" => (int)$machine["addr_hot"],
                         "addr_cold" => (int)$machine["addr_cold"],
                     ];
-                }, $validated["machines"])
+                }, $validated["machines"]),
+                "addr_reset" => (int)$this->addr_reset,
             ];
 
             $device->update([
@@ -125,7 +129,7 @@ new class extends Component {
 
     public function customReset()
     {
-        $this->reset(["name", "line", "ip_address", "is_active", "machines"]);
+        $this->reset(["name", "line", "ip_address", "is_active", "machines", "addr_reset"]);
     }
 
     public function handleNotFound()
@@ -163,6 +167,14 @@ new class extends Component {
             <label for="device-ip-edit" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("IP Address") }}</label>
             <x-text-input id="device-ip-edit" wire:model="ip_address" type="text" placeholder="192.168.1.100" />
             @error("ip_address")
+                <x-input-error messages="{{ $message }}" class="px-3 mt-2" />
+            @enderror
+        </div>
+
+        <div class="mt-6">
+            <label for="device-addr-reset-edit" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Alamat Reset") }}</label>
+            <x-text-input id="device-addr-reset-edit" wire:model="addr_reset" type="number" min="0" />
+            @error("addr_reset")
                 <x-input-error messages="{{ $message }}" class="px-3 mt-2" />
             @enderror
         </div>

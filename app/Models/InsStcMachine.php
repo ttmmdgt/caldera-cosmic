@@ -20,6 +20,7 @@ class InsStcMachine extends Model
         'at_adjust_strength',
         'section_limits_high',
         'section_limits_low',
+        'std_duration'
     ];
 
     protected $casts = [
@@ -28,6 +29,7 @@ class InsStcMachine extends Model
         'at_adjust_strength' => 'array',
         'section_limits_high' => 'array',
         'section_limits_low' => 'array',
+        'std_duration' => 'array',
     ];
 
     public function ins_stc_m_logs(): HasMany
