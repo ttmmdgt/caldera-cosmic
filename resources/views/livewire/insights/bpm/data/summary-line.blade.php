@@ -484,16 +484,6 @@ new class extends Component {
             </div>
             <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
             <div>
-                <label class="block text-sm font-medium mb-2">{{ __('LINE') }}</label>
-                <select wire:model.live="line" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
-                    <option value="1">1</option>
-                    <option value="2">2</option>
-                    <option value="3">3</option>
-                    <option value="4">4</option>
-                    <option value="5">5</option>
-                </select>
-            </div>
-            <div>
                 <label class="block text-sm font-medium mb-2">{{ __('PLANT') }}</label>
                 <select wire:model.live="plant" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
                     <option value="A">A</option>
@@ -506,6 +496,16 @@ new class extends Component {
                     <option value="H">H</option>
                     <option value="I">I</option>
                     <option value="J">J</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2">{{ __('LINE') }}</label>
+                <select wire:model.live="line" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
                 </select>
             </div>
             <div>

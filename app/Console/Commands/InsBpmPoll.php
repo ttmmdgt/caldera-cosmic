@@ -22,6 +22,17 @@ class InsBpmPoll extends Command
     protected $modbusTimeoutSeconds = 2;
     protected $modbusPort = 503;
 
+    public $addressWrite = [
+        'M1_Hot'   => 10,
+        'M1_Cold'  => 11,
+        'M2_Hot'   => 12,
+        'M2_Cold'  => 13,
+        'M3_Hot'   => 14,
+        'M3_Cold'  => 15,
+        'M4_Hot'   => 16,
+        'M4_Cold'  => 17,
+    ];
+
     /**
      * The name and signature of the console command.
      *
@@ -159,6 +170,8 @@ class InsBpmPoll extends Command
     {
         $unit_id = 1; // Standard Modbus unit ID
         $readingsCount = 0;
+        $hmiUpdates = []; // Track HMI updates: ['M1_Hot' => 2, 'M1_Cold' => 3, ...]
+        
         foreach ($device->config['list_mechine'] as $machineConfig) {
             $machineName = $machineConfig['name'];
             $hotAddrs    = $machineConfig['addr_hot'];
@@ -174,7 +187,7 @@ class InsBpmPoll extends Command
                 $requestConditionHot = ReadRegistersBuilder::newReadInputRegisters(
                         'tcp://' . $device->ip_address . ':' . $this->modbusPort,
                         $unit_id)
-                        ->int16($machineConfig['addr_hot'], 'counter_hot') // Counter value at hot
+                        ->int16($hotAddrs, 'counter_hot') // Counter value at hot
                         ->build();
                 // Execute Modbus request
                 $responseConditionHot = (new NonBlockingClient(['readTimeoutSec' => $this->modbusTimeoutSeconds]))
@@ -185,7 +198,7 @@ class InsBpmPoll extends Command
                 $requestConditionCold = ReadRegistersBuilder::newReadInputRegisters(
                     'tcp://' . $device->ip_address . ':' . $this->modbusPort,
                     $unit_id)
-                    ->int16($machineConfig['addr_cold'], 'counter_cold') // Counter value at cold
+                    ->int16($coldAddrs, 'counter_cold') // Counter value at cold
                     ->build();
                 // Execute Modbus request
                 $responseConditionCold = (new NonBlockingClient(['readTimeoutSec' => $this->modbusTimeoutSeconds]))
@@ -197,27 +210,40 @@ class InsBpmPoll extends Command
                 }
                 
                 // Process HOT condition
-                $readingsCount += $this->processCondition(
+                $saved = $this->processCondition(
                     $device,
                     $line,
                     $machineName,
                     'Hot',
                     $counterHot
                 );
+                if ($saved) {
+                    $readingsCount++;
+                    $hmiUpdates["M{$machineName}_Hot"] = $counterHot;
+                }
                 
                 // Process COLD condition
-                $readingsCount += $this->processCondition(
+                $saved = $this->processCondition(
                     $device,
                     $line,
                     $machineName,
                     'Cold',
                     $counterCold
                 );
+                if ($saved) {
+                    $readingsCount++;
+                    $hmiUpdates["M{$machineName}_Cold"] = $counterCold;
+                }
                 
             } catch (\Exception $e) {
                 $this->error("    ✗ Error reading machine {$machineName}: " . $e->getMessage() . " at line " . $e->getLine());
                 continue;
             }
+        }
+
+        // Write all HMI updates in one call
+        if (!empty($hmiUpdates)) {
+            $this->pushToHmi($device, $hmiUpdates);
         }
 
         return $readingsCount;
@@ -248,6 +274,7 @@ class InsBpmPoll extends Command
             if ($this->option('d')) {
                 $this->line("    ✓ Initial reading for {$key} - saved with cumulative {$currentCumulative}");
             }
+            
             return 1;
         }
         
@@ -268,6 +295,7 @@ class InsBpmPoll extends Command
             if ($this->option('d')) {
                 $this->line("    ✓ First reading of new day for {$key} - saved with cumulative {$currentCumulative}");
             }
+            
             return 1;
         }
 
@@ -301,6 +329,7 @@ class InsBpmPoll extends Command
             if ($this->option('d')) {
                 $this->line("    ✓ Saved {$condition}: increment {$increment}, cumulative {$currentCumulative}");
             }
+            
             return 1;
         } else {
             if ($this->option('d')) {
@@ -372,26 +401,85 @@ class InsBpmPoll extends Command
         }
     }
 
-    // on 11 am get curent count and - 1
-    private function adjustCountsAtElevenAM()
+    // push to HMI
+    private function pushToHmi(InsBpmDevice $device, array $updates)
     {
-        $currentHour = Carbon::now()->hour;
-        if ($currentHour === 11 && $this->lastResetDate !== Carbon::now()->toDateString()) {
-            foreach ($this->lastCumulativeValues as $key => $value) {
-                if ($value !== null && $value > 0) {
-                    $this->lastCumulativeValues[$key] = $value - 1;
+        if (empty($updates)) {
+            return false;
+        }
+
+        $unit_id = 1; // Standard Modbus unit ID
+        
+        try {
+            // Step 1: Read current counter values from addresses 0-7 (only once)
+            $requestCounters = ReadRegistersBuilder::newReadInputRegisters(
+                'tcp://' . $device->ip_address . ':' . $this->modbusPort,
+                $unit_id)
+                ->int16(0, 'M1_Hot_counter')
+                ->int16(1, 'M1_Cold_counter')
+                ->int16(2, 'M2_Hot_counter')
+                ->int16(3, 'M2_Cold_counter')
+                ->int16(4, 'M3_Hot_counter')
+                ->int16(5, 'M3_Cold_counter')
+                ->int16(6, 'M4_Hot_counter')
+                ->int16(7, 'M4_Cold_counter')
+                ->build();
+
+            $responseCounters = (new NonBlockingClient(['readTimeoutSec' => $this->modbusTimeoutSeconds]))
+                ->sendRequests($requestCounters)->getData();
+
+            if ($this->option('d')) {
+                $this->line("    ✓ Read counter values from HMI {$device->ip_address}");
+            }
+
+            // Step 2: Prepare values array for all 8 registers (addresses 10-17)
+            $values = [
+                Types::toRegister($responseCounters['M1_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M1_Cold_counter'] ?? 0),
+                Types::toRegister($responseCounters['M2_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M2_Cold_counter'] ?? 0),
+                Types::toRegister($responseCounters['M3_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M3_Cold_counter'] ?? 0),
+                Types::toRegister($responseCounters['M4_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M4_Cold_counter'] ?? 0),
+            ];
+
+            // Step 3: Update values based on what changed
+            foreach ($updates as $machineKey => $counter) {
+                $valueIndex = array_search($machineKey, array_keys($this->addressWrite));
+                if ($valueIndex !== false) {
+                    $values[$valueIndex] = Types::toRegister($counter);
                     if ($this->option('d')) {
-                        $this->line("Adjusted {$key} count down by 1 at 11 AM. New baseline: " . ($value - 1));
+                        $this->line("      Updated {$machineKey} = {$counter}");
                     }
                 }
             }
-            $this->lastResetDate = Carbon::now()->toDateString();
-        }
-    }
 
-    private function checkItsElevenAM(): bool
-    {
-        $currentHour = Carbon::now()->hour;
-        return $currentHour === 11;
+            // Step 4: Write all counters to HMI in one operation
+            $connection = BinaryStreamConnection::getBuilder()
+                ->setHost($device->ip_address)
+                ->setPort($this->modbusPort)
+                ->build();
+            
+            $packet = new WriteMultipleRegistersRequest(
+                10, // Starting address
+                $values, // Array of 8 values
+                $unit_id
+            );
+            
+            $connection->connect();
+            $connection->send($packet);
+            $connection->close();
+
+            if ($this->option('d')) {
+                $this->line("    ✓ Wrote " . count($updates) . " counter(s) to HMI in single operation");
+            }
+
+            return true;
+
+        } catch (\Exception $e) {
+            $this->error("    ✗ Error writing to HMI {$device->ip_address}: " . $e->getMessage());
+            return false;
+        }
     }
 }

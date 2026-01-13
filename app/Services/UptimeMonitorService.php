@@ -24,27 +24,27 @@ class UptimeMonitorService
     ): array
     {
         $startTime = microtime(true);
-        $status = 'offline';
-        $message = '';
-        $duration = null;
+        $status    = 'offline';
+        $message   = '';
+        $duration  = null;
         $isTimeout = false;
         $errorType = null;
 
         try {
             if ($type === 'dwp') {
                 // DWP type: Check connection and data freshness
-                $result = $this->checkDwpStatus($ipAddress, $timeout, $modbusConfig);
-                $status = $result['status'];
-                $message = $result['message'];
-                $duration = $result['duration'];
+                $result    = $this->checkDwpStatus($ipAddress, $timeout, $modbusConfig);
+                $status    = $result['status'];
+                $message   = $result['message'];
+                $duration  = $result['duration'];
                 $isTimeout = $result['is_timeout'] ?? false;
                 $errorType = $result['error_type'] ?? null;
             } elseif ($type === 'modbus') {
                 // Modbus TCP Connection Test
-                $result = $this->checkModbusConnection($ipAddress, $timeout, $modbusConfig);
-                $status = $result['status'];
-                $message = $result['message'];
-                $duration = $result['duration'];
+                $result    = $this->checkModbusConnection($ipAddress, $timeout, $modbusConfig);
+                $status    = $result['status'];
+                $message   = $result['message'];
+                $duration  = $result['duration'];
                 $isTimeout = $result['is_timeout'] ?? false;
                 $errorType = $result['error_type'] ?? null;
             } else {
@@ -54,16 +54,16 @@ class UptimeMonitorService
                 $duration = round((microtime(true) - $startTime) * 1000); // in milliseconds
                 
                 if ($response->successful()) {
-                    $status = 'online';
+                    $status  = 'online';
                     $message = 'Project is running normally';
                 } elseif ($response->status() >= 500) {
-                    $status = 'offline';
+                    $status    = 'offline';
                     $errorType = 'server_error';
-                    $message = 'Server error: ' . $response->status();
+                    $message   = 'Server error: ' . $response->status();
                 } else {
-                    $status = 'idle';
+                    $status    = 'idle';
                     $errorType = 'client_error';
-                    $message = 'Unusual response: ' . $response->status();
+                    $message   = 'Unusual response: ' . $response->status();
                 }
             }
         } catch (\Illuminate\Http\Client\ConnectionException $e) {

@@ -5,9 +5,25 @@ namespace App\Console\Commands;
 use App\Models\InsBpmDevice;
 use App\Models\InsBpmCount;
 use Illuminate\Console\Command;
+use ModbusTcpClient\Composer\Read\ReadRegistersBuilder;
+use ModbusTcpClient\Network\NonBlockingClient;
+use ModbusTcpClient\Network\BinaryStreamConnection;
+use ModbusTcpClient\Packet\ModbusFunction\WriteMultipleRegistersRequest;
+use ModbusTcpClient\Utils\Types;
 
 class InsBpmDecrement extends Command
 {
+    public $addressWrite = [
+        'M1_Hot'   => 10,
+        'M1_Cold'  => 11,
+        'M2_Hot'   => 12,
+        'M2_Cold'  => 13,
+        'M3_Hot'   => 14,
+        'M3_Cold'  => 15,
+        'M4_Hot'   => 16,
+        'M4_Cold'  => 17,
+    ];
+
     /**
      * The name and signature of the console command.
      *
@@ -73,9 +89,11 @@ class InsBpmDecrement extends Command
 
         // Filter only machines 1, 2, 3
         $targetMachines = ['1', '2', '3'];
+        $hmiUpdates = []; // Collect HMI updates
         
         foreach ($device->config['list_mechine'] as $machineConfig) {
             $machineName = $machineConfig['name'];
+            $line = $machineConfig['line'] ?? $device->line;
             
             // Skip if not machine 1, 2, or 3
             if (!in_array($machineName, $targetMachines)) {
@@ -85,15 +103,23 @@ class InsBpmDecrement extends Command
                 continue;
             }
             
-            $this->decrementMachine($device, $machineName, $today);
+            $updates = $this->decrementMachine($device, $machineName, $line, $today);
+            $hmiUpdates = array_merge($hmiUpdates, $updates);
+        }
+
+        // Write all HMI updates in one call
+        if (!empty($hmiUpdates)) {
+            $this->pushToHmi($device, $hmiUpdates);
         }
     }
 
     /**
      * Decrement a specific machine's cumulative count
      */
-    private function decrementMachine(InsBpmDevice $device, $machineName, $today)
+    private function decrementMachine(InsBpmDevice $device, $machineName, $line, $today)
     {
+        $hmiUpdates = [];
+        
         // Process both Hot and Cold conditions
         foreach (['Hot', 'Cold'] as $condition) {
             try {
@@ -124,6 +150,9 @@ class InsBpmDecrement extends Command
                     'cumulative' => $newCumulative,
                 ]);
 
+                // Add to HMI updates
+                $hmiUpdates["M{$line}_{$condition}"] = $newCumulative;
+
                 if ($this->option('v')) {
                     $this->info("  ✓ Machine {$machineName} ({$condition}): {$oldCumulative} → {$newCumulative}");
                 }
@@ -134,6 +163,92 @@ class InsBpmDecrement extends Command
                     $this->error("    Line: " . $e->getLine());
                 }
             }
+        }
+
+        return $hmiUpdates;
+    }
+
+    /**
+     * Push updates to HMI
+     */
+    private function pushToHmi(InsBpmDevice $device, array $updates)
+    {
+        if (empty($updates)) {
+            return false;
+        }
+
+        $unit_id = 1;
+        
+        try {
+            // Step 1: Read current counter values from addresses 0-7 (only once)
+            $requestCounters = ReadRegistersBuilder::newReadInputRegisters(
+                'tcp://' . $device->ip_address . ':503',
+                $unit_id)
+                ->int16(0, 'M1_Hot_counter')
+                ->int16(1, 'M1_Cold_counter')
+                ->int16(2, 'M2_Hot_counter')
+                ->int16(3, 'M2_Cold_counter')
+                ->int16(4, 'M3_Hot_counter')
+                ->int16(5, 'M3_Cold_counter')
+                ->int16(6, 'M4_Hot_counter')
+                ->int16(7, 'M4_Cold_counter')
+                ->build();
+
+            $responseCounters = (new NonBlockingClient(['readTimeoutSec' => 2]))
+                ->sendRequests($requestCounters)->getData();
+
+            if ($this->option('d')) {
+                $this->line("    ✓ Read counter values from HMI {$device->ip_address}");
+            }
+
+            // Step 2: Prepare values array for all 8 registers (addresses 10-17)
+            $values = [
+                Types::toRegister($responseCounters['M1_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M1_Cold_counter'] ?? 0),
+                Types::toRegister($responseCounters['M2_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M2_Cold_counter'] ?? 0),
+                Types::toRegister($responseCounters['M3_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M3_Cold_counter'] ?? 0),
+                Types::toRegister($responseCounters['M4_Hot_counter'] ?? 0),
+                Types::toRegister($responseCounters['M4_Cold_counter'] ?? 0),
+            ];
+
+            // Step 3: Update values based on what changed
+            foreach ($updates as $machineKey => $counter) {
+                $valueIndex = array_search($machineKey, array_keys($this->addressWrite));
+                if ($valueIndex !== false) {
+                    $values[$valueIndex] = Types::toRegister($counter);
+                    if ($this->option('d')) {
+                        $this->line("      Updated {$machineKey} = {$counter}");
+                    }
+                }
+            }
+
+            // Step 4: Write all counters to HMI in one operation
+            $connection = BinaryStreamConnection::getBuilder()
+                ->setHost($device->ip_address)
+                ->setPort(503)
+                ->build();
+            
+            $packet = new WriteMultipleRegistersRequest(
+                10, // Starting address
+                $values, // Array of 8 values
+                $unit_id
+            );
+            
+            $connection->connect();
+            $connection->send($packet);
+            $connection->close();
+
+            if ($this->option('v')) {
+                $this->line("    ✓ Wrote " . count($updates) . " decremented counter(s) to HMI");
+            }
+
+            return true;
+
+        } catch (\Exception $e) {
+            $this->error("    ✗ Error writing to HMI {$device->ip_address}: " . $e->getMessage());
+            return false;
         }
     }
 }

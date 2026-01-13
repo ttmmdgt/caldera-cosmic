@@ -6,7 +6,10 @@ use App\Models\InsBpmDevice;
 use Illuminate\Console\Command;
 use ModbusTcpClient\Composer\Write\WriteRegistersBuilder;
 use ModbusTcpClient\Network\NonBlockingClient;
+use ModbusTcpClient\Network\BinaryStreamConnection;
 use ModbusTcpClient\Composer\Write\WriteCoilsBuilder;
+use ModbusTcpClient\Packet\ModbusFunction\WriteMultipleRegistersRequest;
+use ModbusTcpClient\Utils\Types;
 
 class InsBpmReset extends Command
 {
@@ -48,6 +51,7 @@ class InsBpmReset extends Command
 
             try {
                 $this->resetDevice($device);
+                $this->reinit($device);
                 $successCount++;
             } catch (\Throwable $th) {
                 $this->error("✗ Error resetting {$device->name} ({$device->ip_address}): " . $th->getMessage() . " on line " . $th->getLine());
@@ -85,6 +89,49 @@ class InsBpmReset extends Command
 
         } catch (\Exception $e) {
             $this->error("    ✗ Error resetting line {$device->line} at address {$resetAddr}: " . $e->getMessage() . "\n" . $e->getLine());
+            throw $e; // Re-throw to be caught by parent try-catch
+        }
+    }
+
+    private function reinit(InsBpmDevice $device)
+    {
+        $unit_id = 1; // Standard Modbus unit ID
+        
+        try {
+            // Prepare array of 8 zero values for addresses 10-17
+            $values = [
+                Types::toRegister(0), // Address 10 - M1_Hot
+                Types::toRegister(0), // Address 11 - M1_Cold
+                Types::toRegister(0), // Address 12 - M2_Hot
+                Types::toRegister(0), // Address 13 - M2_Cold
+                Types::toRegister(0), // Address 14 - M3_Hot
+                Types::toRegister(0), // Address 15 - M3_Cold
+                Types::toRegister(0), // Address 16 - M4_Hot
+                Types::toRegister(0), // Address 17 - M4_Cold
+            ];
+
+            // Write all registers using WriteMultipleRegistersRequest
+            $connection = BinaryStreamConnection::getBuilder()
+                ->setHost($device->ip_address)
+                ->setPort(503)
+                ->build();
+            
+            $packet = new WriteMultipleRegistersRequest(
+                10, // Starting address
+                $values, // Array of 8 zero values
+                $unit_id
+            );
+            
+            $connection->connect();
+            $connection->send($packet);
+            $connection->close();
+
+            if ($this->option('v')) {
+                $this->info("  ✓ Reinitialized all counters (addresses 10-17) to 0 for {$device->name}");
+            }
+
+        } catch (\Exception $e) {
+            $this->error("    ✗ Error reinitializing {$device->name}: " . $e->getMessage());
             throw $e; // Re-throw to be caught by parent try-catch
         }
     }

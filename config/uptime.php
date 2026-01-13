@@ -165,6 +165,19 @@ return [
                 'quantity' => 1,         // Number of registers to read
             ],
         ],
+        [
+            'name' => 'BPM G3',
+            'project_group' => 'BPM',
+            'ip' => '172.70.45.241',
+            'timeout' => 10,
+            'type' => 'modbus',
+            'modbus_config' => [
+                'port' => 503,           // Standard Modbus TCP port
+                'unit_id' => 1,          // Slave/Unit ID
+                'start_address' => 1,    // Starting register address
+                'quantity' => 1,         // Number of registers to read
+            ],
+        ],
     ],
 
     /*
