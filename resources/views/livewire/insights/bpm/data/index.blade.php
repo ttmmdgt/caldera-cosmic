@@ -15,13 +15,17 @@ new #[Layout("layouts.app")] class extends Component {
     public function mount()
     {
         $this->view_titles = [
-            "raw-data" => __("Raw Data BPM"),
-            "summary" => __("Summary BPM"),
+            "dashboard" => __("Dashboard BPM"),
+            "raw" => __("Raw Data"),
+            "summary" => __("Summary Emergency (Per Plant)"),
+            "summary-line" => __("Summary Emergency (Per Line)"),
         ];
 
         $this->view_icons = [
-            "raw-data" => "icon-alarm-clock",
-            "summary" => "icon-layout-dashboard",
+            "dashboard" => "icon-layout-dashboard",
+            "raw" => "icon-database",
+            "summary" => "icon-notebook-text",
+            "summary-line" => "icon-chart-line",
         ];
     }
 
@@ -40,12 +44,14 @@ new #[Layout("layouts.app")] class extends Component {
         // Condition Menu
         if ($view === "raw" || $view === "summary" || $view === "summary-line") {
             $this->view_titles = [
+                "dashboard" => __("Dashboard BPM"),
                 "raw" => __("Raw Data"),
                 "summary" => __("Summary Emergency (Per Plant)"),
                 "summary-line" => __("Summary Emergency (Per Line)"),
             ];
 
             $this->view_icons = [
+                "dashboard" => "icon-layout-dashboard",
                 "raw" => "icon-database",
                 "summary" => "icon-notebook-text",
                 "summary-line" => "icon-chart-line",
@@ -92,6 +98,9 @@ new #[Layout("layouts.app")] class extends Component {
 
     <div wire:key="bpm-data-container" wire:loading.class="hidden">
         @switch($view)
+            @case("dashboard")
+                <livewire:insights.bpm.data.dashboard />
+                @break
             @case("summary")
                 <livewire:insights.bpm.data.summary-bpm />
                 @break

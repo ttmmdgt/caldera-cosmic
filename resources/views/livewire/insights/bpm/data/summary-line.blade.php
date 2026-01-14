@@ -132,40 +132,30 @@ new class extends Component {
         $from = Carbon::parse($this->start_at)->startOfDay();
         $to = Carbon::parse($this->end_at)->endOfDay();
 
-        // Total Emergency for selected plant and line
-        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
+        // Get all records and find latest for each machine-condition
+        $allRecords = InsBpmCount::whereBetween('created_at', [$from, $to])
             ->where('plant', $this->plant)
-            ->where('line', $this->line);
+            ->where('line', $this->line)
+            ->when($this->condition !== 'all', fn($q) => $q->where('condition', $this->condition))
+            ->orderBy('created_at', 'desc')
+            ->get();
         
-        if ($this->condition !== 'all') {
-            $query->where('condition', $this->condition);
-        }
+        $latestRecords = $allRecords->groupBy(function($item) {
+            return $item->machine . '-' . $item->condition;
+        })->map->first();
         
-        $totalEmergency = $query->sum('cumulative');
+        // Total Emergency for selected plant and line
+        $totalEmergency = $latestRecords->sum('cumulative');
 
         // Emergency by machine for selected plant and line
-        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
-            ->where('plant', $this->plant)
-            ->where('line', $this->line);
-        
         if ($this->condition !== 'all') {
-            $query->where('condition', $this->condition);
-            $emergencyByMachine = $query->select('machine', DB::raw('SUM(cumulative) as total'))
-                ->groupBy('machine')
-                ->orderByDesc('total')
-                ->get();
+            $emergencyByMachine = $latestRecords->groupBy('machine')->map(function($items) {
+                return (object)['machine' => $items->first()->machine, 'total' => $items->sum('cumulative')];
+            })->sortByDesc('total')->values();
         } else {
-            // Get data grouped by machine and condition for stacked chart
-            $emergencyByMachine = InsBpmCount::whereBetween('created_at', [$from, $to])
-                ->where('plant', $this->plant)
-                ->where('line', $this->line)
-                ->select('machine', 'condition', DB::raw('SUM(cumulative) as total'))
-                ->groupBy('machine', 'condition')
-                ->get();
-            
             // Calculate total per machine for sorting
-            $machineTotals = $emergencyByMachine->groupBy('machine')
-                ->map(fn($items) => $items->sum('total'))
+            $machineTotals = $latestRecords->groupBy('machine')
+                ->map(fn($items) => $items->sum('cumulative'))
                 ->sortDesc();
             
             // Add total field for compatibility
@@ -211,17 +201,10 @@ new class extends Component {
 
         // Emergency by machine data for bar chart
         if ($this->condition === 'all') {
-            // Store detailed data for stacked chart
-            $rawData = InsBpmCount::whereBetween('created_at', [$from, $to])
-                ->where('plant', $this->plant)
-                ->where('line', $this->line)
-                ->select('machine', 'condition', DB::raw('SUM(cumulative) as total'))
-                ->groupBy('machine', 'condition')
-                ->get();
-            
-            $this->emergencyByMachine = $emergencyByMachine->map(function ($item) use ($rawData) {
-                $hot = $rawData->where('machine', $item->machine)->where('condition', 'hot')->first()->total ?? 0;
-                $cold = $rawData->where('machine', $item->machine)->where('condition', 'cold')->first()->total ?? 0;
+            // Store detailed data for stacked chart using latest records
+            $this->emergencyByMachine = $emergencyByMachine->map(function ($item) use ($latestRecords) {
+                $hot = $latestRecords->where('machine', $item->machine)->where('condition', 'hot')->first()->cumulative ?? 0;
+                $cold = $latestRecords->where('machine', $item->machine)->where('condition', 'cold')->first()->cumulative ?? 0;
                 return [
                     'machine' => $item->machine,
                     'total' => $item->total,
@@ -270,23 +253,28 @@ new class extends Component {
 
     private function loadTrendData($from, $to)
     {
-        // Get hourly data
-        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
+        // Get all hourly data
+        $allHourlyRecords = InsBpmCount::whereBetween('created_at', [$from, $to])
             ->where('plant', $this->plant)
-            ->where('line', $this->line);
-        
-        if ($this->condition !== 'all') {
-            $query->where('condition', $this->condition);
-        }
-        
-        $hourlyData = $query->select(
-                'machine',
-                DB::raw('HOUR(created_at) as hour'),
-                DB::raw('SUM(cumulative) as total')
-            )
-            ->groupBy('machine', 'hour')
-            ->orderBy('hour')
+            ->where('line', $this->line)
+            ->when($this->condition !== 'all', fn($q) => $q->where('condition', $this->condition))
+            ->orderBy('created_at', 'desc')
             ->get();
+        
+        // Get latest record for each machine-condition-hour combination
+        $latestHourlyRecords = $allHourlyRecords->groupBy(function($item) {
+            $hour = Carbon::parse($item->created_at)->format('H');
+            return $item->machine . '-' . $item->condition . '-' . $hour;
+        })->map->first();
+        
+        // Group by machine and hour for chart
+        $hourlyData = $latestHourlyRecords->map(function($item) {
+            return (object)[
+                'machine' => $item->machine,
+                'hour' => Carbon::parse($item->created_at)->format('H'),
+                'total' => $item->cumulative
+            ];
+        });
 
         // Get all machines
         $machines = $hourlyData->pluck('machine')->unique()->sort()->values();
@@ -330,20 +318,16 @@ new class extends Component {
         ];
 
         // Calculate trend metrics
-        $morningCount = $hourlyData->whereBetween('hour', [7, 11])->sum('total');
-        $afternoonCount = $hourlyData->whereBetween('hour', [12, 17])->sum('total');
+        $morningCount = $hourlyData->filter(fn($item) => $item->hour >= 7 && $item->hour <= 11)->sum('total');
+        $afternoonCount = $hourlyData->filter(fn($item) => $item->hour >= 12 && $item->hour <= 17)->sum('total');
         
         // Find peak hour
-        $peakHourData = $hourlyData->groupBy('hour')
+        $hourlyTotals = $hourlyData->groupBy('hour')
             ->map(fn($items) => $items->sum('total'))
-            ->sortDesc()
-            ->first();
+            ->sortDesc();
         
-        $peakHour = $hourlyData->groupBy('hour')
-            ->map(fn($items) => $items->sum('total'))
-            ->sortDesc()
-            ->keys()
-            ->first();
+        $peakHourData = $hourlyTotals->first();
+        $peakHour = $hourlyTotals->keys()->first();
 
         $this->trendByHour = [
             'peak_hour' => $peakHour !== null ? $peakHour : 0,
@@ -632,9 +616,14 @@ new class extends Component {
     function initCharts(barData, trendData) {
         // Bar Chart
         const barCtx = document.getElementById('barChart');
-        if (barChart) barChart.destroy();
         
+        // Properly destroy existing chart instance
         if (barCtx) {
+            const existingBarChart = Chart.getChart(barCtx);
+            if (existingBarChart) {
+                existingBarChart.destroy();
+            }
+            
             barChart = new Chart(barCtx, {
                 type: 'bar',
                 data: barData,
@@ -675,9 +664,14 @@ new class extends Component {
 
         // Trend Chart (Line Chart)
         const trendCtx = document.getElementById('trendChart');
-        if (trendChart) trendChart.destroy();
         
+        // Properly destroy existing chart instance
         if (trendCtx) {
+            const existingTrendChart = Chart.getChart(trendCtx);
+            if (existingTrendChart) {
+                existingTrendChart.destroy();
+            }
+            
             trendChart = new Chart(trendCtx, {
                 type: 'line',
                 data: trendData,

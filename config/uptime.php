@@ -114,9 +114,9 @@ return [
             ],
         ],
         [
-            'name' => 'IP STC Machine 9',
+            'name' => 'IP STC Machine 5',
             'project_group' => 'IP_STC',
-            'ip' => '172.70.87.140',
+            'ip' => '172.70.86.73',
             'timeout' => 10,
             'type' => 'modbus',
             'modbus_config' => [

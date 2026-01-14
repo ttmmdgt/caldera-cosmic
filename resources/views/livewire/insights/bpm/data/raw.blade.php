@@ -44,7 +44,7 @@ new class extends Component {
         $start = Carbon::parse($this->start_at);
         $end = Carbon::parse($this->end_at)->endOfDay();
 
-        $query = InsBpmCount::whereBetween("created_at", [$start, $end]);
+        $query = InsBpmCount::whereBetween("created_at", [$start, $end])->where("cumulative", ">", 0);
 
         if ($this->line) {
             $query->where("line", "like", "%" . strtoupper(trim($this->line)) . "%");

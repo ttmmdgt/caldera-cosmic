@@ -106,29 +106,23 @@ new class extends Component {
         $from = Carbon::parse($this->start_at)->startOfDay();
         $to = Carbon::parse($this->end_at)->endOfDay();
 
-        // Calculate total emergency across all lines
-        $query = InsBpmCount::whereBetween('created_at', [$from, $to])
-            ->when($this->plant, fn($q) => $q->where('plant', $this->plant));
-        
-        if ($this->condition !== 'all') {
-            $query->where('condition', $this->condition);
-        }
-        
-        $totalEmergency = $query->select('line', 'machine', 'condition', DB::raw('MAX(cumulative) as max_cumulative'))
-            ->groupBy('line', 'machine', 'condition')
-            ->get()
-            ->sum('max_cumulative');
-
-        // Get emergency count per line
-        $emergencyPerLineRaw = InsBpmCount::whereBetween('created_at', [$from, $to])
+        // Get all records and find latest for each line-machine-condition
+        $allRecords = InsBpmCount::whereBetween('created_at', [$from, $to])
             ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
             ->when($this->condition !== 'all', fn($q) => $q->where('condition', $this->condition))
-            ->select('line', 'machine', 'condition', DB::raw('MAX(cumulative) as max_cumulative'))
-            ->groupBy('line', 'machine', 'condition')
+            ->orderBy('created_at', 'desc')
             ->get();
         
-        $emergencyPerLine = $emergencyPerLineRaw->groupBy('line')->map(function($items) {
-            return (object) ['line' => $items->first()->line, 'total' => $items->sum('max_cumulative')];
+        $latestRecords = $allRecords->groupBy(function($item) {
+            return $item->line . '-' . $item->machine . '-' . $item->condition;
+        })->map->first();
+        
+        // Calculate total emergency across all lines
+        $totalEmergency = $latestRecords->sum('cumulative');
+
+        // Get emergency count per line
+        $emergencyPerLine = $latestRecords->groupBy('line')->map(function($items) {
+            return (object) ['line' => $items->first()->line, 'total' => $items->sum('cumulative')];
         })->sortByDesc('total')->values();
 
         // Calculate highest, lowest and average
@@ -180,22 +174,26 @@ new class extends Component {
         $from = Carbon::parse($this->start_at)->startOfDay();
         $to = Carbon::parse($this->end_at)->endOfDay();
 
-        // Get ranking data - grouped by line and machine
-        $rankingRaw = InsBpmCount::whereBetween('created_at', [$from, $to])
+        // Get all records and find latest for each line-machine-condition
+        $allRecords = InsBpmCount::whereBetween('created_at', [$from, $to])
             ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
             ->when($this->condition !== 'all', fn($q) => $q->where('condition', $this->condition))
-            ->select('line', 'machine', 'condition', DB::raw('MAX(cumulative) as max_cumulative'))
-            ->groupBy('line', 'machine', 'condition')
+            ->orderBy('created_at', 'desc')
             ->get();
         
-        $this->rankingData = $rankingRaw->groupBy(function($item) {
+        $latestRecords = $allRecords->groupBy(function($item) {
+            return $item->line . '-' . $item->machine . '-' . $item->condition;
+        })->map->first();
+
+        // Get ranking data - grouped by line and machine
+        $this->rankingData = $latestRecords->groupBy(function($item) {
             return $item->line . '-' . $item->machine;
         })->map(function($items) {
             $first = $items->first();
             return (object) [
                 'line' => $first->line,
                 'machine' => $first->machine,
-                'total_counter' => $items->sum('max_cumulative')
+                'total_counter' => $items->sum('cumulative')
             ];
         })->sortByDesc('total_counter')->take(16)->values();
     }
@@ -209,14 +207,12 @@ new class extends Component {
             // Load Emergency Counter data with hot/cold breakdown
             $emergencyData = InsBpmCount::whereBetween('created_at', [$from, $to])
                 ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
-                ->select(
-                    'line',
-                    'machine',
-                    'condition',
-                    DB::raw('MAX(cumulative) as total_counter')
-                )
-                ->groupBy('line', 'machine', 'condition')
-                ->get();
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->groupBy(function($item) {
+                    return $item->line . '-' . $item->machine . '-' . $item->condition;
+                })
+                ->map->first();
             
             // Get unique line-machine combinations and calculate totals
             $lineMachines = $emergencyData->groupBy(function($item) {
@@ -226,9 +222,9 @@ new class extends Component {
                 return [
                     'line' => $parts[0],
                     'machine' => $parts[1],
-                    'total' => $items->sum('total_counter'),
-                    'hot' => $items->where('condition', 'hot')->first()->total_counter ?? 0,
-                    'cold' => $items->where('condition', 'cold')->first()->total_counter ?? 0,
+                    'total' => $items->sum('cumulative'),
+                    'hot' => $items->where('condition', 'hot')->first()->cumulative ?? 0,
+                    'cold' => $items->where('condition', 'cold')->first()->cumulative ?? 0,
                 ];
             })->sortByDesc('total')->take(20)->values();
             
@@ -260,22 +256,21 @@ new class extends Component {
             $emergencyData = InsBpmCount::whereBetween('created_at', [$from, $to])
                 ->when($this->plant, fn($q) => $q->where('plant', $this->plant))
                 ->where('condition', $this->condition)
-                ->select(
-                    'line',
-                    'machine',
-                    DB::raw('MAX(cumulative) as total_counter')
-                )
-                ->groupBy('line', 'machine')
-                ->orderByDesc('total_counter')
-                ->limit(20)
-                ->get();
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->groupBy(function($item) {
+                    return $item->line . '-' . $item->machine;
+                })
+                ->map->first();
 
             // Format labels and extract data
-            $labels = $emergencyData->map(function($item) {
+            $sortedData = $emergencyData->sortByDesc('cumulative')->take(20);
+            
+            $labels = $sortedData->map(function($item) {
                 return $item->line . ' - Mesin ' . $item->machine;
             })->values()->toArray();
             
-            $data = $emergencyData->pluck('total_counter')->map(function($value) {
+            $data = $sortedData->pluck('cumulative')->map(function($value) {
                 return (int) $value;
             })->values()->toArray();
 
@@ -401,9 +396,43 @@ new class extends Component {
                     emergencyChart: null,
                     isDestroying: false,
                     hasData: true,
+                    initTimeout: null,
+
+                    destroyChart() {
+                        if (this.isDestroying) return;
+                        
+                        this.isDestroying = true;
+                        
+                        // Clear any pending initialization
+                        if (this.initTimeout) {
+                            clearTimeout(this.initTimeout);
+                            this.initTimeout = null;
+                        }
+                        
+                        const canvasEl = this.$refs.emergencyChartCanvas;
+                        if (canvasEl) {
+                            const existingChart = Chart.getChart(canvasEl);
+                            if (existingChart) {
+                                try {
+                                    existingChart.destroy();
+                                } catch (e) {
+                                    console.log('Error destroying chart:', e);
+                                }
+                            }
+                        }
+                        
+                        this.emergencyChart = null;
+                        this.isDestroying = false;
+                    },
 
                     initOrUpdateEmergencyChart(chartData) {
-                        // Prevent multiple simultaneous operations
+                        // Clear any pending initialization
+                        if (this.initTimeout) {
+                            clearTimeout(this.initTimeout);
+                            this.initTimeout = null;
+                        }
+
+                        // Prevent operations during destruction
                         if (this.isDestroying) {
                             return;
                         }
@@ -413,109 +442,109 @@ new class extends Component {
                             return;
                         }
 
-                        const labels = chartData.labels || [];
-                        const datasets = chartData.datasets || [];
+                        const labels = chartData?.labels || [];
+                        const datasets = chartData?.datasets || [];
 
                         // Check if Chart.js is loaded
                         if (typeof Chart === 'undefined') {
                             return;
                         }
 
-                        // Destroy old chart if exists
-                        if (this.emergencyChart) {
-                            this.isDestroying = true;
-                            try {
-                                this.emergencyChart.destroy();
-                            } catch (e) {
-                                console.log('Error destroying chart:', e);
-                            }
-                            this.emergencyChart = null;
-                            this.isDestroying = false;
-                        }
-
                         // Check if we have data
                         if (labels.length === 0 || datasets.length === 0) {
                             this.hasData = false;
+                            this.destroyChart();
                             return;
                         }
 
                         this.hasData = true;
 
-                        const ctx = canvasEl.getContext('2d');
-                        if (!ctx) {
-                            return;
-                        }
-                        
-                        try {
-                            this.emergencyChart = new Chart(ctx, {
-                                type: 'bar',
-                                data: {
-                                    labels: labels,
-                                    datasets: datasets
-                                },
-                                options: {
-                                    indexAxis: 'y',
-                                    responsive: true,
-                                    maintainAspectRatio: false,
-                                    plugins: {
-                                        legend: {
-                                            display: datasets.length > 1,
-                                            position: 'top'
-                                        },
-                                        tooltip: {
-                                            callbacks: {
-                                                label: function(context) {
-                                                    return context.dataset.label + ': ' + context.parsed.x + ' counts';
-                                                }
-                                            }
-                                        }
+                        // Destroy existing chart
+                        this.destroyChart();
+
+                        // Wait a bit to ensure clean state before creating new chart
+                        this.initTimeout = setTimeout(() => {
+                            if (!this.hasData || this.isDestroying) {
+                                return;
+                            }
+
+                            const ctx = canvasEl?.getContext('2d');
+                            if (!ctx) {
+                                return;
+                            }
+                            
+                            try {
+                                this.emergencyChart = new Chart(ctx, {
+                                    type: 'bar',
+                                    data: {
+                                        labels: labels,
+                                        datasets: datasets
                                     },
-                                    scales: {
-                                        x: {
-                                            stacked: datasets.length > 1,
-                                            beginAtZero: true,
-                                            title: {
-                                                display: true,
-                                                text: 'Counter'
+                                    options: {
+                                        indexAxis: 'y',
+                                        responsive: true,
+                                        maintainAspectRatio: false,
+                                        animation: {
+                                            duration: 300
+                                        },
+                                        plugins: {
+                                            legend: {
+                                                display: datasets.length > 1,
+                                                position: 'top'
                                             },
-                                            ticks: {
-                                                callback: function(value) {
-                                                    return value.toLocaleString();
+                                            tooltip: {
+                                                callbacks: {
+                                                    label: function(context) {
+                                                        return context.dataset.label + ': ' + context.parsed.x + ' counts';
+                                                    }
                                                 }
                                             }
                                         },
-                                        y: {
-                                            stacked: datasets.length > 1,
-                                            title: {
-                                                display: true,
-                                                text: 'Line - Machine'
+                                        scales: {
+                                            x: {
+                                                stacked: datasets.length > 1,
+                                                beginAtZero: true,
+                                                title: {
+                                                    display: true,
+                                                    text: 'Counter'
+                                                },
+                                                ticks: {
+                                                    callback: function(value) {
+                                                        return value.toLocaleString();
+                                                    }
+                                                }
+                                            },
+                                            y: {
+                                                stacked: datasets.length > 1,
+                                                title: {
+                                                    display: true,
+                                                    text: 'Line - Machine'
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            });
-                        } catch (e) {
-                            console.error('Chart creation error:', e);
-                            this.hasData = false;
-                        }
+                                });
+                            } catch (e) {
+                                console.error('Chart creation error:', e);
+                                this.hasData = false;
+                            }
+                        }, 50);
                     }
                 }"
                 x-init="
-                    // Initial render
-                    $nextTick(() => {
+                    // Initial render with delay
+                    setTimeout(() => {
                         const labels = @js($this->chartLabels);
                         const datasets = @js($this->chartDatasets);
                         
                         initOrUpdateEmergencyChart({ labels, datasets });
-                    });
+                    }, 100);
                 "
                 @chart-data-updated.window="
-                    $nextTick(() => {
-                        const eventData = $event.detail;
-                        if (eventData) {
-                            initOrUpdateEmergencyChart(eventData);
-                        }
-                    });
+                    const eventData = $event.detail;
+                    if (eventData) {
+                        initOrUpdateEmergencyChart(eventData);
+                    }
                 "
             >
                 <div wire:ignore style="height: 500px; position: relative;">
