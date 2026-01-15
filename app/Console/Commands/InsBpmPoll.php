@@ -159,14 +159,14 @@ class InsBpmPoll extends Command
         $conditionDecrement = ($currentHour < 11) ? 2 : 3;
 
         $values = [
-                "M1_Hot"  =>($hmiUpdates['M1_Hot'] - $conditionDecrement) ?? 0,
-                "M1_Cold" =>($hmiUpdates['M1_Cold'] - $conditionDecrement) ?? 0,
-                "M2_Hot"  =>($hmiUpdates['M2_Hot'] - $conditionDecrement) ?? 0,
-                "M2_Cold" =>($hmiUpdates['M2_Cold'] - $conditionDecrement) ?? 0,
-                "M3_Hot"  =>($hmiUpdates['M3_Hot'] - $conditionDecrement) ?? 0,
-                "M3_Cold" =>($hmiUpdates['M3_Cold'] - $conditionDecrement) ?? 0,
-                "M4_Hot"  =>$hmiUpdates['M4_Hot'] ?? 0,
-                "M4_Cold" =>$hmiUpdates['M4_Cold'] ?? 0,
+                "M1_Hot"  => max(0, ($hmiUpdates['M1_Hot'] ?? 0) - $conditionDecrement),
+                "M1_Cold" => max(0, ($hmiUpdates['M1_Cold'] ?? 0) - $conditionDecrement),
+                "M2_Hot"  => max(0, ($hmiUpdates['M2_Hot'] ?? 0) - $conditionDecrement),
+                "M2_Cold" => max(0, ($hmiUpdates['M2_Cold'] ?? 0) - $conditionDecrement),
+                "M3_Hot"  => max(0, ($hmiUpdates['M3_Hot'] ?? 0) - $conditionDecrement),
+                "M3_Cold" => max(0, ($hmiUpdates['M3_Cold'] ?? 0) - $conditionDecrement),
+                "M4_Hot"  => $hmiUpdates['M4_Hot'] ?? 0,
+                "M4_Cold" => $hmiUpdates['M4_Cold'] ?? 0,
         ];
 
         // Write all HMI updates in one call
@@ -234,12 +234,6 @@ class InsBpmPoll extends Command
             // First reading - if we have a DB record, calculate increment, otherwise it's initial value
             if ($latestRecord) {
                 $increment = $currentCumulative - $latestRecord->cumulative;
-                
-                // If increment is 0 but we have cumulative, set increment same as cumulative
-                if ($increment === 0 && $currentCumulative > 0) {
-                    $increment = $currentCumulative;
-                }
-                
                 // Only save if increment is positive
                 if ($increment > 0) {
                     InsBpmCount::create([
@@ -276,7 +270,7 @@ class InsBpmPoll extends Command
                     'line' => $line,
                     'machine' => $machineName,
                     'condition' => $condition,
-                    'incremental' => $currentCumulative,
+                    'incremental' => 0,
                     'cumulative' => $currentCumulative,
                 ]);
                 
@@ -284,7 +278,7 @@ class InsBpmPoll extends Command
                 $this->lastReadingDates[$key] = $today;
                 
                 if ($this->option('d')) {
-                    $this->line("    ✓ Initial reading for {$key} - saved with increment {$currentCumulative}, cumulative {$currentCumulative}");
+                    $this->line("    ✓ Initial reading for {$key} - saved with increment 0, cumulative {$currentCumulative}");
                 }
                 
                 return 1;
@@ -402,23 +396,23 @@ class InsBpmPoll extends Command
         
         try {
             $valToSend = [
-                Types::toRegister($values["M1_Hot"]),
-                Types::toRegister($values["M1_Cold"]),
-                Types::toRegister($values["M2_Hot"]),
-                Types::toRegister($values["M2_Cold"]),
-                Types::toRegister($values["M3_Hot"]),
-                Types::toRegister($values["M3_Cold"]),
-                Types::toRegister($values["M4_Hot"]),
-                Types::toRegister($values["M4_Cold"])
+                Types::toRegister($values["M1_Hot"] ?? 0),
+                Types::toRegister($values["M1_Cold"] ?? 0),
+                Types::toRegister($values["M2_Hot"] ?? 0),
+                Types::toRegister($values["M2_Cold"] ?? 0),
+                Types::toRegister($values["M3_Hot"] ?? 0),
+                Types::toRegister($values["M3_Cold"] ?? 0),
+                Types::toRegister($values["M4_Hot"] ?? 0),
+                Types::toRegister($values["M4_Cold"] ?? 0)
             ];
 
             // Step 3: Update values based on what changed
             foreach ($values as $machineKey => $counter) {
                 $valueIndex = array_search($machineKey, array_keys($this->addressWrite));
                 if ($valueIndex !== false) {
-                    $valToSend[$valueIndex] = Types::toRegister($counter);
+                    $valToSend[$valueIndex] = Types::toRegister($counter ?? 0);
                     if ($this->option('d')) {
-                        $this->line("      Updated {$machineKey} = {$counter}");
+                        $this->line("      Updated {$machineKey} = " . ($counter ?? 0));
                     }
                 }
             }
