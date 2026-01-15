@@ -498,6 +498,9 @@ new class extends Component {
                                                         return context.dataset.label + ': ' + context.parsed.x + ' counts';
                                                     }
                                                 }
+                                            },
+                                            datalabels: {
+                                                display: false
                                             }
                                         },
                                         scales: {
@@ -509,8 +512,12 @@ new class extends Component {
                                                     text: 'Counter'
                                                 },
                                                 ticks: {
+                                                    stepSize: 1,
                                                     callback: function(value) {
-                                                        return value.toLocaleString();
+                                                        if (Number.isInteger(value)) {
+                                                            return value.toLocaleString();
+                                                        }
+                                                        return '';
                                                     }
                                                 }
                                             },

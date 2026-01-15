@@ -7,7 +7,7 @@ use Livewire\Attributes\On;
 
 new #[Layout("layouts.app")] class extends Component {
     #[Url]
-    public $view = "raw";
+    public $view = "dashboard";
 
     public array $view_titles = [];
     public array $view_icons = [];

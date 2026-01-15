@@ -642,6 +642,9 @@ new class extends Component {
                                     return context.dataset.label + ': ' + context.parsed.x + ' counts';
                                 }
                             }
+                        },
+                        datalabels: {
+                            display: false
                         }
                     },
                     scales: {
@@ -649,8 +652,12 @@ new class extends Component {
                             stacked: true,
                             beginAtZero: true,
                             ticks: {
+                                stepSize: 1,
                                 callback: function(value) {
-                                    return value.toLocaleString();
+                                    if (Number.isInteger(value)) {
+                                        return value.toLocaleString();
+                                    }
+                                    return '';
                                 }
                             }
                         },
@@ -690,6 +697,9 @@ new class extends Component {
                                     return context.dataset.label + ': ' + (context.parsed.y ?? 0) + ' counts';
                                 }
                             }
+                        },
+                        datalabels: {
+                            display: false
                         }
                     },
                     scales: {
@@ -708,8 +718,12 @@ new class extends Component {
                             },
                             beginAtZero: true,
                             ticks: {
+                                stepSize: 1,
                                 callback: function(value) {
-                                    return value.toLocaleString();
+                                    if (Number.isInteger(value)) {
+                                        return value.toLocaleString();
+                                    }
+                                    return '';
                                 }
                             }
                         }

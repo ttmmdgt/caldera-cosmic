@@ -21,7 +21,7 @@ new class extends Component {
     public $plant = 'G';
     
     #[Url]
-    public $line = 'G5';
+    public $line = '3';
     
     public $lastUpdated;
     public $emergencyByMachine = [];
@@ -70,18 +70,15 @@ new class extends Component {
             ->where('line', $this->line)
             ->orderBy('created_at', 'desc')
             ->get();
-        
         // Get latest records for each machine-condition combination
         $latestRecords = $allRecords->groupBy(function($item) {
             return $item->machine . '-' . $item->condition;
         })->map->first();
-        
         // Prepare emergency by machine data for horizontal bar chart
         $machines = $latestRecords->pluck('machine')->unique()->sort()->values();
-        
         $this->emergencyByMachine = $machines->map(function($machine) use ($latestRecords) {
-            $hot = $latestRecords->where('machine', $machine)->where('condition', 'Hot')->first()->cumulative ?? 0;
-            $cold = $latestRecords->where('machine', $machine)->where('condition', 'Cold')->first()->cumulative ?? 0;
+            $hot  = $latestRecords->where('machine', $machine)->where('condition', 'hot')->first()->cumulative ?? 0;
+            $cold = $latestRecords->where('machine', $machine)->where('condition', 'cold')->first()->cumulative ?? 0;
             
             return [
                 'machine' => $machine,
@@ -106,8 +103,7 @@ new class extends Component {
         
         foreach ($devices as $device) {
             // Get the latest uptime log for this device
-            $latestLog = UptimeLog::where('project_name', 'ins-bpm')
-                ->where('ip_address', $device->ip_address)
+            $latestLog = UptimeLog::where('ip_address', $device->ip_address)
                 ->latest('checked_at')
                 ->first();
             
@@ -274,11 +270,11 @@ new class extends Component {
             <div>
                 <label class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">{{ __('LINE') }}</label>
                 <select wire:model.live="line" class="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-sm">
-                    <option value="G1">G1</option>
-                    <option value="G2">G2</option>
-                    <option value="G3">G3</option>
-                    <option value="G4">G4</option>
-                    <option value="G5">G5</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
                 </select>
             </div>
         </div>
@@ -292,9 +288,9 @@ new class extends Component {
     </div>
 
     {{-- Main Content Grid --}}
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+    <div class="grid grid-cols-1 lg:grid-cols-6 gap-6 mb-6">
         {{-- Online System Monitoring (Pie Chart) --}}
-        <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+        <div class="lg:col-span-2 bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
             <h2 class="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-200">{{ __('Online System Monitoring') }}</h2>
             <div class="flex flex-col items-center">
                 <div class="w-64 h-64 mb-4">
@@ -336,7 +332,7 @@ new class extends Component {
         </div>
 
         {{-- Emergency Counter - Horizontal Bar Chart --}}
-        <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+        <div class="lg:col-span-4 bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
             <div class="mb-4">
                 <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-200">{{ __('Emergency Counter - Line') }} {{ $line }}</h2>
                 <p class="text-sm text-gray-500">{{ __('SORT') }}</p>
@@ -378,6 +374,9 @@ new class extends Component {
                                     return context.label + ': ' + context.parsed + '%';
                                 }
                             }
+                        },
+                        datalabels: {
+                            display: false
                         }
                     }
                 }
@@ -411,6 +410,9 @@ new class extends Component {
                                     return context.dataset.label + ': ' + context.parsed.x + ' counts';
                                 }
                             }
+                        },
+                        datalabels: {
+                            display: false
                         }
                     },
                     scales: {
@@ -418,8 +420,12 @@ new class extends Component {
                             stacked: true,
                             beginAtZero: true,
                             ticks: {
+                                stepSize: 1,
                                 callback: function(value) {
-                                    return value.toLocaleString();
+                                    if (Number.isInteger(value)) {
+                                        return value.toLocaleString();
+                                    }
+                                    return '';
                                 }
                             }
                         },
