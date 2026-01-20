@@ -230,8 +230,8 @@ new class extends Component {
                             <td class="font-mono">
                                 @if($count->incremental > 0)
                                     <span class="text-green-600 dark:text-green-400">+{{ number_format($count->incremental) }}</span>
-                                @else
-                                    {{ number_format($count->incremental) }}
+                                @elseif($count->incremental == 0)
+                                    <span class="text-neutral-600 dark:text-neutral-400">+1</span>
                                 @endif
                             </td>
                             <td class="font-mono">{{ $count->created_at }}</td>
