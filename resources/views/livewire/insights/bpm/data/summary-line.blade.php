@@ -166,7 +166,7 @@ new class extends Component {
 
         // Find highest and lowest
         $highest = $emergencyByMachine->first();
-        $lowest = $emergencyByMachine->last();
+        $lowest  = $emergencyByMachine->last();
         $average = $emergencyByMachine->count() > 0 
             ? round($emergencyByMachine->avg('total')) 
             : 0;
@@ -211,16 +211,29 @@ new class extends Component {
                     'hot' => $hot,
                     'cold' => $cold,
                 ];
-            })->toArray();
+            })
+            // Sort by machine number (1,2,3,4)
+            ->sortBy(function($item) {
+                // Pastikan machine adalah angka, jika tidak fallback ke string
+                return is_numeric($item['machine']) ? (int)$item['machine'] : $item['machine'];
+            })
+            ->values()
+            ->toArray();
         } else {
             $maxTotal = $emergencyByMachine->max('total');
-            $this->emergencyByMachine = $emergencyByMachine->map(function ($item) use ($maxTotal) {
-                return [
-                    'machine' => $item->machine,
-                    'total' => $item->total,
-                    'color' => $this->getColorForValue($item->total, $maxTotal)
-                ];
-            })->toArray();
+            $this->emergencyByMachine = $emergencyByMachine
+                ->sortBy(function($item) {
+                    return is_numeric($item->machine) ? (int)$item->machine : $item->machine;
+                })
+                ->map(function ($item) use ($maxTotal) {
+                    return [
+                        'machine' => $item->machine,
+                        'total' => $item->total,
+                        'color' => $this->getColorForValue($item->total, $maxTotal)
+                    ];
+                })
+                ->values()
+                ->toArray();
         }
 
         // Trend by hour

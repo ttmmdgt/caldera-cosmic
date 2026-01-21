@@ -17,7 +17,7 @@ new class extends Component {
     public $end_at;
     
     #[Url]
-    public $plant = '';
+    public $plant = 'G';
     
     #[Url]
     public $condition = 'all';
@@ -36,7 +36,7 @@ new class extends Component {
         
         // Set default dates if not set
         if (! $this->start_at || ! $this->end_at) {
-            $this->setThisWeek();
+            $this->setToday();
         }
         
         // Load initial data
@@ -220,13 +220,13 @@ new class extends Component {
             })->map(function($items, $key) {
                 $parts = explode('-', $key);
                 return [
-                    'line' => $parts[0],
+                    'line' => $this->plant .$parts[0],
                     'machine' => $parts[1],
                     'total' => $items->sum('cumulative'),
                     'hot' => $items->where('condition', 'hot')->first()->cumulative ?? 0,
                     'cold' => $items->where('condition', 'cold')->first()->cumulative ?? 0,
                 ];
-            })->sortByDesc('total')->take(20)->values();
+            })->take(20)->values();
             
             // Format labels
             $labels = $lineMachines->map(function($item) {

@@ -208,7 +208,6 @@ new class extends Component {
                         <th>{{ __("Machine") }}</th>
                         <th>{{ __("Condition") }}</th>
                         <th>{{ __("Cumulative") }}</th>
-                        <th>{{ __("Incremental") }}</th>
                         <th>{{ __("Timestamp") }}</th>
                     </tr>
                     @foreach ($counts as $count)
@@ -227,13 +226,6 @@ new class extends Component {
                                 @endif
                             </td>
                             <td class="font-mono">{{ number_format($count->cumulative) }}</td>
-                            <td class="font-mono">
-                                @if($count->incremental > 0)
-                                    <span class="text-green-600 dark:text-green-400">+{{ number_format($count->incremental) }}</span>
-                                @elseif($count->incremental == 0)
-                                    <span class="text-neutral-600 dark:text-neutral-400">+1</span>
-                                @endif
-                            </td>
                             <td class="font-mono">{{ $count->created_at }}</td>
                         </tr>
                     @endforeach

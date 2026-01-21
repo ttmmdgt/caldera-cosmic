@@ -16,7 +16,7 @@ Schedule::command('uptime:check')->everyMinute();
 
 // BPM scheduled commands
 Schedule::command('app:ins-bpm-reset')->dailyAt('06:04');
-Schedule::command('app:ins-bpm-poll')->everyFifteenMinutes();
+Schedule::command('app:ins-bpm-poll')->everyMinute();
 
 // DWP scheduled commands
 Schedule::command('app:ins-dwp-reset')->dailyAt('07:00');

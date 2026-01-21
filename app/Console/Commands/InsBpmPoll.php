@@ -153,6 +153,12 @@ class InsBpmPoll extends Command
             }
         }
 
+        // Cek koneksi device sebelum lanjut
+        if (!$this->isDeviceConnected($device->ip_address, $this->modbusPort)) {
+            $this->error("    ✗ Device {$device->ip_address} not connected. Skipping update and save.");
+            return 0;
+        }
+
         // check condition decrement if < 11 AM decrement condition its 1 and if >=11 AM decrement condition its 2
         $currentHour = Carbon::now()->hour;
         $conditionDecrement = ($currentHour < 11) ? 1 : 2;
@@ -186,6 +192,22 @@ class InsBpmPoll extends Command
         }
 
         return $readingsCount;
+    }
+
+    // Check if device is connected
+    private function isDeviceConnected($ip, $port, $timeout = 1)
+    {
+        $connected = false;
+        try {
+            $fp = @fsockopen($ip, $port, $errno, $errstr, $timeout);
+            if ($fp) {
+                fclose($fp);
+                $connected = true;
+            }
+        } catch (\Exception $e) {
+            $connected = false;
+        }
+        return $connected;
     }
     
     /**
