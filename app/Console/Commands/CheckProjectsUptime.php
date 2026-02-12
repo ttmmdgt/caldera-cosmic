@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
+use App\Models\Project;
 use App\Services\UptimeMonitorService;
 
 class CheckProjectsUptime extends Command
@@ -30,14 +31,12 @@ class CheckProjectsUptime extends Command
 
         // Define your projects here or load from config
         $projects = $this->getProjects();
-
         // Filter by specific projects if provided
         if ($projectNames = $this->option('project')) {
             $projects = array_filter($projects, function($project) use ($projectNames) {
                 return in_array($project['name'], $projectNames);
             });
         }
-
         if (empty($projects)) {
             $this->error('No projects configured to check.');
             return Command::FAILURE;
@@ -47,13 +46,13 @@ class CheckProjectsUptime extends Command
         
         foreach ($projects as $project) {
             $this->line("Checking {$project['name']}...");
-            
             $result = $service->checkProject(
                 $project['name'],
+                $project['project_group'],
                 $project['ip'],
                 $project['timeout'] ?? 10,
                 $project['type'] ?? 'http',
-                $project['modbus_config'] ?? []
+                json_decode(json_encode($project['modbus_config']), true) ?? []
             );
 
             $results[] = $result;
@@ -102,9 +101,9 @@ class CheckProjectsUptime extends Command
         }
 
         // Summary
-        $online = count(array_filter($results, fn($r) => $r['status'] === 'online'));
+        $online  = count(array_filter($results, fn($r) => $r['status'] === 'online'));
         $offline = count(array_filter($results, fn($r) => $r['status'] === 'offline'));
-        $idle = count(array_filter($results, fn($r) => $r['status'] === 'idle'));
+        $idle    = count(array_filter($results, fn($r) => $r['status'] === 'idle'));
         $timeouts = count(array_filter($results, fn($r) => $r['is_timeout'] ?? false));
 
         $this->info("Check completed!");
@@ -129,7 +128,7 @@ class CheckProjectsUptime extends Command
     private function getProjects(): array
     {
         // Load projects from config file
-        return config('uptime.projects', []);
+        return Project::all()->toArray();
     }
 
     /**

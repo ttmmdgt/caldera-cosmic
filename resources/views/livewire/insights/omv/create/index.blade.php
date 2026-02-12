@@ -263,7 +263,7 @@ new #[Layout("layouts.app")] class extends Component {
                                 </div>
                             </div>
                         </x-modal>
-
+                        <!-- modal details -->
                         <x-modal name="details" maxWidth="2xl" focusable>
                             <div>
                                 <div class="flex justify-between items-start p-6">
@@ -281,11 +281,21 @@ new #[Layout("layouts.app")] class extends Component {
                                         </div>
                                         <div class="mt-6">
                                             <label for="batchModel" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Model") }}</label>
-                                            <x-text-input id="batchModel" x-model="batchModel" type="text" />
+                                            <x-input-autocomplete 
+                                                id="batchModel" 
+                                                wire:model="batchModel" 
+                                                searchRoute="autocomplete.rubber-models"
+                                                placeholder="Type to search models..." 
+                                            />
                                         </div>
                                         <div class="mt-6">
                                             <label for="batchColor" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Warna") }}</label>
-                                            <x-text-input id="batchColor" x-model="batchColor" type="text" />
+                                            <x-input-autocomplete 
+                                                id="batchColor" 
+                                                wire:model="batchColor" 
+                                                searchRoute="autocomplete.rubber-colors"
+                                                placeholder="Type to search colors..." 
+                                            />
                                         </div>
                                         <div class="mt-6">
                                             <label for="batchMCS" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("MCS") }}</label>
@@ -371,7 +381,7 @@ new #[Layout("layouts.app")] class extends Component {
                                 <x-primary-button type="button" x-on:click="$dispatch('close')">{{ __("Simpan") }}</x-primary-button>
                             </div>
                         </x-modal>
-
+                        <!-- end modal details -->
                         <x-modal name="recipes" focusable>
                             <div class="p-6">
                                 <!-- Step 2: Mixing Type -->

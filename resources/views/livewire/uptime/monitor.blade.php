@@ -5,6 +5,7 @@ use Livewire\Attributes\Layout;
 use Livewire\WithPagination;
 use Livewire\Attributes\Url;
 use App\Models\UptimeLog;
+use App\Models\Project;
 use App\Services\UptimeMonitorService;
 use Carbon\Carbon;
 
@@ -41,17 +42,12 @@ new #[Layout("layouts.app")] class extends Component {
 
     private function loadProjects()
     {
-        // Get project groups from config
-        $allProjects = config('uptime.projects', []);
-        $groups = [];
-        
-        foreach ($allProjects as $project) {
-            if (isset($project['project_group'])) {
-                $groups[$project['project_group']] = $project['project_group'];
-            }
-        }
-        
-        $this->projects = array_values($groups);
+        // Get distinct project groups from active projects
+        $this->projects = Project::active()
+            ->whereNotNull('project_group')
+            ->distinct()
+            ->pluck('project_group')
+            ->toArray();
     }
 
     private function loadStatistics()
@@ -63,17 +59,9 @@ new #[Layout("layouts.app")] class extends Component {
 
         if ($this->project) {
             // Get all project names in the selected group
-            $allProjects = config('uptime.projects', []);
-            $projectNames = array_column(
-                array_filter($allProjects, function($proj) {
-                    return isset($proj['project_group']) && $proj['project_group'] === $this->project;
-                }),
-                'name'
-            );
-            
-            if (!empty($projectNames)) {
-                $query->whereIn('project_name', $projectNames);
-            }
+            $allProjects = Project::active()->get();
+            $allProjects = $allProjects->where('project_group', $this->project);
+            $query->whereIn('ip_address', $allProjects->pluck('ip')->toArray());
         }
 
         $logs = $query->get();
@@ -96,18 +84,16 @@ new #[Layout("layouts.app")] class extends Component {
     public function loadLiveStatus()
     {
         // Get latest status for each project
-        $allProjects = config('uptime.projects', []);
+        $allProjects = Project::active()->get();
         $this->liveStatus = [];
 
         // Filter projects if a specific project group is selected
         if ($this->project) {
-            $allProjects = array_filter($allProjects, function($proj) {
-                return isset($proj['project_group']) && $proj['project_group'] === $this->project;
-            });
+            $allProjects = $allProjects->where('project_group', $this->project);
         }
 
         foreach ($allProjects as $project) {
-            $latestLog = UptimeLog::where('project_name', $project['name'])
+            $latestLog = UptimeLog::where('ip_address', $project->ip)
                 ->orderBy('checked_at', 'desc')
                 ->first();
 
@@ -115,11 +101,11 @@ new #[Layout("layouts.app")] class extends Component {
                 // Calculate total online duration for today (or current filter period)
                 $start = Carbon::parse($this->start_at);
                 $end = Carbon::parse($this->end_at);
-                $uptimeSeconds = $this->calculateTotalOnlineDuration($project['name'], $start, $end);
-                $downtimeSeconds = $this->calculateTotalOfflineDuration($project['name'], $start, $end);
+                $uptimeSeconds = $this->calculateTotalOnlineDuration($project->ip, $start, $end);
+                $downtimeSeconds = $this->calculateTotalOfflineDuration($project->ip, $start, $end);
                 
                 $this->liveStatus[] = [
-                    'name' => $project['name'],
+                    'name' => $project->name,
                     'status' => $latestLog->status,
                     'ip' => $latestLog->ip_address,
                     'message' => $latestLog->message,
@@ -132,9 +118,9 @@ new #[Layout("layouts.app")] class extends Component {
                 ];
             } else {
                 $this->liveStatus[] = [
-                    'name' => $project['name'],
+                    'name' => $project->name,
                     'status' => 'unknown',
-                    'ip' => $project['ip'],
+                    'ip' => $project->ip,
                     'message' => 'No data yet',
                     'checked_at' => null,
                     'uptime_seconds' => 0,
@@ -147,10 +133,10 @@ new #[Layout("layouts.app")] class extends Component {
         }
     }
 
-    private function calculateTotalOnlineDuration(string $projectName, Carbon $start, Carbon $end): int
+    private function calculateTotalOnlineDuration(string $ip, Carbon $start, Carbon $end): int
     {
         // Get all status change logs within the date range, ordered by time
-        $logs = UptimeLog::where('project_name', $projectName)
+        $logs = UptimeLog::where('ip_address', $ip)
             ->whereBetween('checked_at', [$start, $end])
             ->orderBy('checked_at', 'asc')
             ->get();
@@ -187,10 +173,10 @@ new #[Layout("layouts.app")] class extends Component {
         return $totalOnlineSeconds;
     }
 
-    private function calculateTotalOfflineDuration(string $projectName, Carbon $start, Carbon $end): int
+    private function calculateTotalOfflineDuration(string $ip, Carbon $start, Carbon $end): int
     {
         // Get all status change logs within the date range, ordered by time
-        $logs = UptimeLog::where('project_name', $projectName)
+        $logs = UptimeLog::where('ip_address', $ip)
             ->whereBetween('checked_at', [$start, $end])
             ->orderBy('checked_at', 'asc')
             ->get();
@@ -264,17 +250,9 @@ new #[Layout("layouts.app")] class extends Component {
 
         if ($this->project) {
             // Get all project names in the selected group
-            $allProjects = config('uptime.projects', []);
-            $projectNames = array_column(
-                array_filter($allProjects, function($proj) {
-                    return isset($proj['project_group']) && $proj['project_group'] === $this->project;
-                }),
-                'name'
-            );
-            
-            if (!empty($projectNames)) {
-                $query->whereIn('project_name', $projectNames);
-            }
+            $allProjects = Project::active()->get();
+            $allProjects = $allProjects->where('project_group', $this->project);
+            $query->whereIn('ip_address', $allProjects->pluck('ip')->toArray());
         }
 
         if ($this->status) {
@@ -352,13 +330,25 @@ new #[Layout("layouts.app")] class extends Component {
 
 ?>
 
-<div class="px-4 py-6 max-w-[1600px] mx-auto" wire:poll.30s="loadLiveStatus">
+<div class="p-6 max-w-7xl mx-auto text-neutral-800 dark:text-neutral-200" wire:poll.30s="loadLiveStatus">
     <!-- Header Section -->
     <div class="mb-8">
         <div class="flex items-center justify-between">
-            <div>
-                <h1 class="text-2xl font-bold text-neutral-800 dark:text-white mb-1">Caldera Uptime Monitoring</h1>
-                <p class="text-sm text-neutral-500">Real-time system uptime for tracking All Services</p>
+            <div class="flex items-center gap-2">
+                <div>
+                    <h1 class="text-2xl font-bold text-neutral-800 dark:text-white mb-1">Caldera Uptime Monitoring</h1>
+                    <p class="text-sm text-neutral-500">Real-time system uptime for tracking All Services</p>
+                </div>
+                @auth
+                <div>
+                    <a wire:navigate href="{{ route('uptime.projects.index') }}">
+                        <x-secondary-button type="button" class="text-xs">
+                            <i class="icon-settings"></i>
+                            {{ __('Settings') }}
+                        </x-secondary-button>
+                    </a>
+                </div>
+                @endauth
             </div>
             <div class="flex items-center gap-2 text-xs text-neutral-400">
                 <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
@@ -442,21 +432,17 @@ new #[Layout("layouts.app")] class extends Component {
             <!-- Refresh Button -->
             <div>
                 <label class="block text-xs font-medium text-transparent mb-2">Action</label>
-                <button wire:click="refreshStats" 
-                    class="px-4 py-2 text-sm font-medium border border-neutral-200 bg-neutral-700 hover:bg-neutral-300 text-dark dark:text-neutral-100 hover:text-neutral-900 rounded-lg transition-colors flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                    </svg>
-                    Refresh
-                </button>
+                <x-primary-button type="button" wire:click="refreshStats" class="h-9">
+                    <i class="icon-rotate-cw"></i>
+                    {{ __('Refresh') }}
+                </x-primary-button>
             </div>
         </div>
-    </div>
     </div>
 
      <!-- Statistics Overview -->
     @if($project)
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-8 mt-4">
         <div class="bg-white dark:bg-neutral-800 rounded-xl p-4 border border-neutral-400 dark:border-neutral-700 shadow">
             <div class="flex items-center justify-between mb-2">
                 <div class="w-8 h-8 bg-green-500/10 dark:bg-green-500/20 rounded-lg flex items-center justify-center">

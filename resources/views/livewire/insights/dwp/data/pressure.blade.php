@@ -580,7 +580,7 @@ new #[Layout("layouts.app")] class extends Component {
 
     /** 
      * Make function for get emergency press count
-     * get data from table ins_dwp_counts where duration < 10
+     * get data from table ins_dwp_counts where duration < 13 sec
      * Returns array with counts grouped by machine
      */
     public function getEmergencyPressCount(){
@@ -588,7 +588,7 @@ new #[Layout("layouts.app")] class extends Component {
         $end = Carbon::parse($this->end_at)->endOfDay();
 
         $query = InsDwpCount::whereBetween("created_at", [$start, $end])
-            ->where('duration', '<', 10)
+            ->where('duration', '<', 13)
             ->selectRaw('mechine, COUNT(*) as count')
             ->groupBy('mechine');
 
@@ -1109,7 +1109,7 @@ new #[Layout("layouts.app")] class extends Component {
                  x-transition:leave-start="opacity-100 transform scale-100"
                  x-transition:leave-end="opacity-0 transform scale-95"
                  class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 px-3 py-2 text-xs text-white bg-gray-900 rounded shadow-lg whitespace-nowrap">
-                Number of emergency presses for Machine 1 (press time < 10s)
+                Number of emergency presses for Machine 1 (press time <10 & <13 sec)
             </div>
         </div>
         <div class="relative bg-neutral-200 dark:bg-neutral-800 shadow sm:rounded-lg p-4"
@@ -1126,7 +1126,7 @@ new #[Layout("layouts.app")] class extends Component {
                  x-transition:leave-start="opacity-100 transform scale-100"
                  x-transition:leave-end="opacity-0 transform scale-95"
                  class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 px-3 py-2 text-xs text-white bg-gray-900 rounded shadow-lg whitespace-nowrap">
-                Number of emergency presses for Machine 2 (press time < 10s)
+                Number of emergency presses for Machine 2 (press time <10 & <13 sec)
             </div>
         </div>
         <div class="relative bg-neutral-200 dark:bg-neutral-800 shadow sm:rounded-lg p-4"
@@ -1143,7 +1143,7 @@ new #[Layout("layouts.app")] class extends Component {
                  x-transition:leave-start="opacity-100 transform scale-100"
                  x-transition:leave-end="opacity-0 transform scale-95"
                  class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 px-3 py-2 text-xs text-white bg-gray-900 rounded shadow-lg whitespace-nowrap">
-                Number of emergency presses for Machine 3 (press time < 10s)
+                Number of emergency presses for Machine 3 (press time <10 & <13 sec)
             </div>
         </div>
         <div class="relative bg-neutral-200 dark:bg-neutral-800 shadow sm:rounded-lg p-4"
@@ -1160,7 +1160,7 @@ new #[Layout("layouts.app")] class extends Component {
                  x-transition:leave-start="opacity-100 transform scale-100"
                  x-transition:leave-end="opacity-0 transform scale-95"
                  class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 px-3 py-2 text-xs text-white bg-gray-900 rounded shadow-lg whitespace-nowrap">
-                Number of emergency presses for Machine 4 (press time < 10s)
+                Number of emergency presses for Machine 4 (press time <10 & <13 sec)
             </div>
         </div>
     </div>

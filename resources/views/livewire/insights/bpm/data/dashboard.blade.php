@@ -2,366 +2,159 @@
 
 use Livewire\Volt\Component;
 use Livewire\Attributes\Url;
-use App\Models\InsBpmCount;
 use App\Models\InsBpmDevice;
-use App\Models\UptimeLog;
-use App\Traits\HasDateRangeFilter;
-use Illuminate\Support\Facades\DB;
+use App\Services\BpmEmergencyService;
+use App\Services\UptimeCalculatorService;
+use App\Services\DurationFormatterService;
 use Carbon\Carbon;
 
 new class extends Component {
-    use HasDateRangeFilter;
+    #[Url] public $start_at;
+    #[Url] public $plant = 'G';
+    #[Url] public $line = '3';
     
     public $view = "dashboard";
-    
-    #[Url]
-    public $start_at;
-    
-    #[Url]
-    public $plant = 'G';
-    
-    #[Url]
-    public $line = '3';
-    
     public $lastUpdated;
     public $emergencyByMachine = [];
     public $onlineStats = [];
-
-    public function mount()
+    
+    public function mount(): void
     {
         $this->dispatch('update-menu', $this->view);
-        
-        // Set default date to today
-        if (!$this->start_at) {
-            $this->start_at = now()->format('Y-m-d');
-        }
-        
-        // Load initial data
+        $this->start_at ??= now()->format('Y-m-d');
         $this->loadData();
     }
     
-    public function updatedStartAt()
+    public function updatedStartAt(): void
     {
-        $this->loadData();
-        $this->refreshCharts();
+        $this->loadAndRefresh();
     }
     
-    public function updatedPlant()
+    public function updatedPlant(): void
     {
-        $this->loadData();
-        $this->refreshCharts();
+        $this->loadAndRefresh();
     }
     
-    public function updatedLine()
+    public function updatedLine(): void
     {
-        $this->loadData();
-        $this->refreshCharts();
+        $this->loadAndRefresh();
     }
-
-    public function loadData()
+    
+    public function loadData(): void
     {
         $date = Carbon::parse($this->start_at);
-        $from = $date->copy()->startOfDay();
-        $to   = $date->copy()->endOfDay();
-        // Get all records for the selected date and line
-        $allRecords = InsBpmCount::whereBetween('created_at', [$from, $to])
-            ->where('plant', $this->plant)
-            ->where('line', $this->line)
-            ->orderBy('created_at', 'desc')
-            ->get();
-      
-        // Get latest records for each machine-condition combination
-        $latestRecords = $allRecords->groupBy(function($item) {
-            return $item->machine . '-' . $item->condition;
-        })->map->first();
-        // Prepare emergency by machine data for horizontal bar chart
-        $machines = $latestRecords->pluck('machine')->unique()->sort()->values();
-        $this->emergencyByMachine = $machines->map(function($machine) use ($latestRecords) {
-            $hot  = $latestRecords->where('machine', $machine)->where('condition', 'hot')->first()->cumulative ?? 0;
-            $cold = $latestRecords->where('machine', $machine)->where('condition', 'cold')->first()->cumulative ?? 0;
-            return [
-                'machine' => $machine,
-                'hot' => $hot,
-                'cold' => $cold,
-                'total' => $hot + $cold,
-            ];
-        })->values()->toArray();
-        // Calculate online system monitoring stats from UptimeLog
-        $devices = InsBpmDevice::where('is_active', true)
-            ->where('line', $this->line)
-            ->get();
-        $totalDevices = $devices->count();
-        $device       = $devices->first(); //It's definitely one device because there's already a filter.
-        $onlineCount  = 0;
-        $offlineCount = 0;
-        $timeoutCount = 0;
-        $onlineDuration  = 0;
-        $offlineDuration = 0;
-        $timeoutDuration = 0;
-        $firstOnlineDurations = [];
-
-        // Validasi jika device null atau tidak punya ip_address
-        if (!$device || !isset($device->ip_address)) {
-            $onlineDuration  = 0;
-            $offlineDuration = 0;
-            $timeoutDuration = 0;
-            $onlinePercentage  = 0;
-            $offlinePercentage = 0;
-            $timeoutPercentage = 0;
-            $onlineTime = $this->formatDuration(0);
-            $offlineTime = $this->formatDuration(0);
-            $timeoutTime = $this->formatDuration(0);
-            $this->onlineStats = [
-                'online_percentage' => 0,
-                'offline_percentage' => 0,
-                'timeout_percentage' => 0,
-                'online_time' => $onlineTime,
-                'offline_time' => $offlineTime,
-                'timeout_time' => $timeoutTime,
-            ];
-            $this->lastUpdated = now()->format('n/j/Y, H:i.s');
-            return;
-        }
-
-        // Get project groups from config
-        $allProjects = config('uptime.projects', []);
-        // maping get project name by ip address
-        $projectName = null;
-        foreach ($allProjects as $name => $info) {
-            if (isset($info['ip']) && $info['ip'] === $device->ip_address) {
-                $projectName = $info['name'];
-                break;
-            }
-        }
-
-        // working hours: 6 AM to 17 PM
-        $workingStart = $date->copy()->setHour(6)->setMinute(0)->setSecond(0);
-        $workingEnd   = $date->copy()->setHour(17)->setMinute(0)->setSecond(0);
-        if ($projectName) {
-            // Calculate total online duration for the selected date
-            $onlineDuration  = $this->calculateTotalOnlineDuration($projectName, $workingStart, $workingEnd);
-            $offlineDuration = $this->calculateTotalOfflineDuration($projectName, $workingStart, $workingEnd);
-            $timeoutDuration = $this->calculateTotalTimeoutDuration($projectName, $workingStart, $workingEnd);
-            $totalDuration   = $onlineDuration + $offlineDuration + $timeoutDuration;
-            // Calculate percentages
-            $onlinePercentage  = $totalDuration > 0 ? round(($onlineDuration / $totalDuration) * 100, 2) : 0;
-            $offlinePercentage = $totalDuration > 0 ? round(($offlineDuration / $totalDuration) * 100, 2) : 0;
-            $timeoutPercentage = $totalDuration > 0 ? round(($timeoutDuration / $totalDuration) * 100, 2) : 0;
-        } else {
-            // If project name not found, set all durations to zero
-            $onlineDuration  = 0;
-            $offlineDuration = 0;
-            $timeoutDuration = 0;
-            $onlinePercentage  = 0;
-            $offlinePercentage = 0;
-            $timeoutPercentage = 0;
-        }
-
         
-        // Format durations
-        $onlineTime = $this->formatDuration($onlineDuration);
-        $offlineTime = $this->formatDuration($offlineDuration);
-        $timeoutTime = $this->formatDuration($timeoutDuration);
-        $this->onlineStats = [
-            'online_percentage' => $onlinePercentage,
-            'offline_percentage' => $offlinePercentage,
-            'timeout_percentage' => $timeoutPercentage,
-            'online_time' => $onlineTime,
-            'offline_time' => $offlineTime,
-            'timeout_time' => $timeoutTime,
-        ];
-
+        $this->emergencyByMachine = $this->loadEmergencyData($date);
+        $this->onlineStats = $this->loadOnlineStats($date);
         $this->lastUpdated = now()->format('n/j/Y, H:i.s');
     }
-
-    private function formatDuration($seconds)
+    
+    private function loadEmergencyData(Carbon $date): array
     {
-        if ($seconds === 0) {
-            return '0 seconds';
-        }
-
-        $hours = floor($seconds / 3600);
-        $minutes = floor(($seconds % 3600) / 60);
-        $secs = $seconds % 60;
-
-        $parts = [];
-        if ($hours > 0) {
-            $parts[] = $hours . ' hour' . ($hours > 1 ? 's' : '');
-        }
-        if ($minutes > 0) {
-            $parts[] = $minutes . ' minute' . ($minutes > 1 ? 's' : '');
-        }
-        if ($secs > 0 || empty($parts)) {
-            $parts[] = $secs . ' second' . ($secs > 1 ? 's' : '');
-        }
-
-        return implode(' ', $parts);
+        $service = app(BpmEmergencyService::class);
+        return $service->getEmergencyDataByMachine($this->plant, $this->line, $date);
     }
-
-    // get data for uptime monitoring data
-    private function calculateTotalOnlineDuration(string $projectName, Carbon $start, Carbon $end): int
+    
+    private function loadOnlineStats(Carbon $date): array
     {
-        // Get all status change logs within the date range, ordered by time
-        $logs = UptimeLog::where('project_name', $projectName)
-            ->whereBetween('checked_at', [$start, $end])
-            ->orderBy('checked_at', 'asc')
-            ->get();
-
-        if ($logs->isEmpty()) {
-            return 0;
+        $device = $this->getActiveDevice();
+        
+        if (!$device) {
+            return $this->getEmptyOnlineStats();
         }
-
-        $totalOnlineSeconds = 0;
-        $onlineStartTime = null;
-
-        foreach ($logs as $log) {
-            if ($log->status === 'online') {
-                if ($onlineStartTime === null) {
-                    // Start of an online period
-                    $onlineStartTime = $log->checked_at;
-                }
-            } else {
-                // Status changed to offline or idle
-                if ($onlineStartTime !== null) {
-                    // End of an online period, calculate duration
-                    $totalOnlineSeconds += $onlineStartTime->diffInSeconds($log->checked_at);
-                    $onlineStartTime = null;
-                }
-            }
+        
+        $projectName = $this->getProjectNameByIp($device->ip_address);
+        
+        if (!$projectName) {
+            return $this->getEmptyOnlineStats();
         }
-
-        // If still online at the end of the period, add the remaining duration
-        if ($onlineStartTime !== null) {
-            $endTime = Carbon::now()->min($end);
-            $totalOnlineSeconds += $onlineStartTime->diffInSeconds($endTime);
-        }
-
-        return $totalOnlineSeconds;
-    }
-
-    private function calculateTotalOfflineDuration(string $projectName, Carbon $start, Carbon $end): int
-    {
-        // Get all status change logs within the date range, ordered by time
-        $logs = UptimeLog::where('project_name', $projectName)
-            ->whereBetween('checked_at', [$start, $end])
-            ->orderBy('checked_at', 'asc')
-            ->get();
-
-        if ($logs->isEmpty()) {
-            return 0;
-        }
-
-        $totalOfflineSeconds = 0;
-        $count = $logs->count();
-        for ($i = 0; $i < $count; $i++) {
-            $log = $logs[$i];
-            if ($log->status === 'offline') {
-                // Cari log berikutnya sebagai akhir periode offline
-                $startOffline = $log->checked_at;
-                $endOffline = null;
-                for ($j = $i + 1; $j < $count; $j++) {
-                    if ($logs[$j]->status !== 'offline') {
-                        $endOffline = $logs[$j]->checked_at;
-                        break;
-                    }
-                }
-                if ($endOffline === null) {
-                    // Jika tidak ada log berikutnya yang bukan offline, gunakan $end atau waktu sekarang
-                    $endOffline = Carbon::now()->min($end);
-                }
-                $totalOfflineSeconds += $startOffline->diffInSeconds($endOffline);
-
-                // Lewati ke log setelah periode offline
-                while ($i + 1 < $count && $logs[$i + 1]->status === 'offline') {
-                    $i++;
-                }
-            }
-        }
-
-        return $totalOfflineSeconds;
-    }
-
-    private function calculateTotalTimeoutDuration(string $projectName, Carbon $start, Carbon $end): int
-    {
-        // Get all status change logs within the date range, ordered by time
-        $logs = UptimeLog::where('project_name', $projectName)
-            ->whereBetween('checked_at', [$start, $end])
-            ->orderBy('checked_at', 'asc')
-            ->get();
-
-        if ($logs->isEmpty()) {
-            return 0;
-        }
-
-        $timeoutSeconds = 0;
-        $count = $logs->count();
-        for ($i = 0; $i < $count; $i++) {
-            $log = $logs[$i];
-            if ($log->status === 'offline') {
-                $startOffline = $log->checked_at;
-                $endOffline = null;
-                for ($j = $i + 1; $j < $count; $j++) {
-                    if ($logs[$j]->status !== 'offline') {
-                        $endOffline = $logs[$j]->checked_at;
-                        break;
-                    }
-                }
-                if ($endOffline === null) {
-                    $endOffline = Carbon::now()->min($end);
-                }
-                $duration = $startOffline->diffInSeconds($endOffline);
-                if ($duration < 300) {
-                    $timeoutSeconds += $duration;
-                }
-                // Lewati ke log setelah periode offline
-                while ($i + 1 < $count && $logs[$i + 1]->status === 'offline') {
-                    $i++;
-                }
-            }
-        }
-
-        return $timeoutSeconds;
-    }
-
-    public function with(): array
-    {
+        
+        $workingHours = config('bpm.working_hours');
+        $start = $date->copy()->setTime($workingHours['start'], 0);
+        $end = $date->copy()->setTime($workingHours['end'], 0);
+        
+        $calculator = app(UptimeCalculatorService::class);
+        $stats = $calculator->calculateStats($projectName, $start, $end);
+        
+        $formatter = app(DurationFormatterService::class);
+        
         return [
-            'emergencyByMachine' => $this->emergencyByMachine,
-            'onlineStats' => $this->onlineStats,
-            'lastUpdated' => $this->lastUpdated,
+            'online_percentage' => $stats['online_percentage'],
+            'offline_percentage' => $stats['offline_percentage'],
+            'timeout_percentage' => $stats['timeout_percentage'],
+            'online_time' => $formatter->format($stats['online_duration']),
+            'offline_time' => $formatter->format($stats['offline_duration']),
+            'timeout_time' => $formatter->format($stats['timeout_duration']),
         ];
     }
-
-    public function refreshCharts()
+    
+    private function getActiveDevice(): ?InsBpmDevice
+    {
+        return InsBpmDevice::where('is_active', true)
+            ->where('line', $this->line)
+            ->first();
+    }
+    
+    private function getProjectNameByIp(string $ipAddress): ?string
+    {
+        $projects = config('uptime.projects', []);
+        
+        foreach ($projects as $name => $info) {
+            if (($info['ip'] ?? null) === $ipAddress) {
+                return $info['name'];
+            }
+        }
+        
+        return null;
+    }
+    
+    private function getEmptyOnlineStats(): array
+    {
+        return [
+            'online_percentage' => 0,
+            'offline_percentage' => 0,
+            'timeout_percentage' => 0,
+            'online_time' => '0 seconds',
+            'offline_time' => '0 seconds',
+            'timeout_time' => '0 seconds',
+        ];
+    }
+    
+    private function loadAndRefresh(): void
+    {
+        $this->loadData();
+        $this->refreshCharts();
+    }
+    
+    public function refreshCharts(): void
     {
         $this->dispatch('refresh-charts', [
             'emergencyData' => $this->prepareEmergencyChartData(),
             'onlineData' => $this->prepareOnlineChartData(),
         ]);
     }
-
-    private function prepareEmergencyChartData()
+    
+    private function prepareEmergencyChartData(): array
     {
         if (empty($this->emergencyByMachine)) {
-            return [
-                'labels' => [],
-                'datasets' => []
-            ];
+            return ['labels' => [], 'datasets' => []];
         }
         
+        $machines = collect($this->emergencyByMachine);
+        
         return [
-            'labels' => collect($this->emergencyByMachine)->pluck('machine')->map(fn($m) => 'Machine ' . $m)->toArray(),
+            'labels' => $machines->pluck('machine')->map(fn($m) => "Machine $m")->toArray(),
             'datasets' => [
                 [
                     'label' => 'Hot',
-                    'data' => collect($this->emergencyByMachine)->pluck('hot')->toArray(),
+                    'data' => $machines->pluck('hot')->toArray(),
                     'backgroundColor' => 'rgba(239, 68, 68, 0.8)',
                     'borderColor' => 'rgba(239, 68, 68, 1)',
                     'borderWidth' => 1,
                 ],
                 [
                     'label' => 'Cold',
-                    'data' => collect($this->emergencyByMachine)->pluck('cold')->toArray(),
+                    'data' => $machines->pluck('cold')->toArray(),
                     'backgroundColor' => 'rgba(59, 130, 246, 0.8)',
                     'borderColor' => 'rgba(59, 130, 246, 1)',
                     'borderWidth' => 1,
@@ -369,31 +162,29 @@ new class extends Component {
             ]
         ];
     }
-
-    private function prepareOnlineChartData()
+    
+    private function prepareOnlineChartData(): array
     {
         return [
             'labels' => ['Online', 'Offline', 'Timeout (RTO)'],
-            'datasets' => [
-                [
-                    'data' => [
-                        $this->onlineStats['online_percentage'] ?? 0,
-                        $this->onlineStats['offline_percentage'] ?? 0,
-                        $this->onlineStats['timeout_percentage'] ?? 0
-                    ],
-                    'backgroundColor' => [
-                        'rgba(34, 197, 94, 0.8)', // green
-                        'rgba(156, 163, 175, 0.8)', // gray
-                        'rgba(251, 146, 60, 0.8)', // orange
-                    ],
-                    'borderColor' => [
-                        'rgba(34, 197, 94, 1)',
-                        'rgba(156, 163, 175, 1)',
-                        'rgba(251, 146, 60, 1)',
-                    ],
-                    'borderWidth' => 1,
-                ]
-            ]
+            'datasets' => [[
+                'data' => [
+                    $this->onlineStats['online_percentage'] ?? 0,
+                    $this->onlineStats['offline_percentage'] ?? 0,
+                    $this->onlineStats['timeout_percentage'] ?? 0
+                ],
+                'backgroundColor' => [
+                    'rgba(34, 197, 94, 0.8)',
+                    'rgba(156, 163, 175, 0.8)',
+                    'rgba(251, 146, 60, 0.8)',
+                ],
+                'borderColor' => [
+                    'rgba(34, 197, 94, 1)',
+                    'rgba(156, 163, 175, 1)',
+                    'rgba(251, 146, 60, 1)',
+                ],
+                'borderWidth' => 1,
+            ]]
         ];
     }
 }; ?>

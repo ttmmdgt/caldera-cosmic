@@ -62,7 +62,7 @@ new #[Layout("layouts.app")] class extends Component {
 
 ?>
 
-<x-slot name="title">{{ __("Data - Pemantauan deep well press") }}</x-slot>
+<x-slot name="title">{{ __("Data - Back Part Molding") }}</x-slot>
 
 <x-slot name="header">
     <x-nav-insights-bpm></x-nav-insights-bpm>

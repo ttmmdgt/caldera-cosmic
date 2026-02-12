@@ -10,6 +10,7 @@ use App\Models\InsLdcHide;
 use App\Models\InsClmRecord;
 use App\Models\InsDwpCount;
 use App\Models\InsBpmCount;
+use App\Models\InsPhDosingCount;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 
@@ -26,7 +27,7 @@ new #[Layout("layouts.app")] class extends Component {
     public int $ldc_codes_recent = 0;
     public int $dwp_lines_recent = 0;
     public int $bpm_lines_recent = 0;
-
+    public int $ph_data_recent = 0;
     // Climate data properties
     public float|null $temperature_latest = null;
     public float|null $humidity_latest = null;
@@ -189,7 +190,7 @@ new #[Layout("layouts.app")] class extends Component {
         $this->ldc_codes_recent = $this->getCachedLdcCodes();
         $this->dwp_lines_recent = $this->getCachedDwpLines();
         $this->bpm_lines_recent = $this->getCachedBpmLines();
-
+        $this->ph_data_recent = $this->getCachedPhData();
         // Get fresh climate data (no caching)
         $this->getLatestClimateData();
     }
@@ -201,6 +202,15 @@ new #[Layout("layouts.app")] class extends Component {
             return InsBpmCount::where("updated_at", ">=", $timeWindow)
                 ->distinct("line")
                 ->count("line");
+        });
+    }
+
+    private function getCachedPhData(): int
+    {
+        return Cache::remember("ph_data_recent", now()->addMinutes(30), function () {
+            $timeWindow = Carbon::now()->subHours(1);
+            return InsPhDosingCount::where("updated_at", ">=", $timeWindow)
+                ->count();
         });
     }
 
@@ -422,6 +432,31 @@ new #[Layout("layouts.app")] class extends Component {
                                 <div class="px-6 py-3 text-lg">
                                     <i class="icon-chevron-right"></i>
                                 </div>
+                            </div>
+                        </a>
+                    </div>
+                </div>
+                <div>
+                    <h1 class="uppercase text-sm text-neutral-500 mb-4 px-8">{{ __("Sistem Area Stockfit") }}</h1>
+                    <div class="bg-white dark:bg-neutral-800 shadow overflow-hidden sm:rounded-lg divide-y divide-neutral-200 dark:text-white dark:divide-neutral-700">
+                        <a href="{{ route('insights.pds.data.index') }}" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                            <div class="flex items-center">
+                                <div class="px-6 py-3">
+                                    <img src="/ins-pds.svg" class="w-16 h-16 dark:invert fs-5 font-bold" />
+                                </div>
+                                <div class="grow">
+                                    <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan PH Dossing") }}</div>
+                                    <div class="flex flex-col gap-y-2 text-neutral-600 dark:text-neutral-400">
+                                        <div class="flex items-center gap-x-2 text-xs uppercase text-neutral-500">
+                                            <div class="w-2 h-2 {{ $ph_data_recent > 0 ? "bg-green-500" : "bg-red-500" }} rounded-full"></div>
+                                            <div>{{ $ph_data_recent > 0 ? $ph_data_recent . " " . __("line ") : __("luring") }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="px-6 py-3 text-lg">
+                                    <i class="icon-chevron-right"></i>
+                                </div>
+                            </div>
                             </div>
                         </a>
                     </div>

@@ -29,6 +29,12 @@ new class extends Component {
     #[Url]
     public $hasil;
 
+    #[Url]
+    public $status_test;
+
+    #[Url]
+    public $shift;
+
     public $perPage = 20;
 
     private function getTestsQuery()
@@ -66,6 +72,14 @@ new class extends Component {
 
         if ($this->hasil) {
             $query->where("ins_rdc_tests.eval", $this->hasil);
+        }
+
+        if ($this->status_test) {
+            $query->where("ins_rdc_tests.status_test", $this->status_test);
+        }
+
+        if ($this->shift) {
+            $query->where("ins_rdc_tests.shift", $this->shift);
         }
 
         return $query->orderBy("updated_at", "DESC");
@@ -208,6 +222,27 @@ new class extends Component {
                         <option value="queue">{{ __("Queue") }}</option>
                     </x-select>
                 </div>
+                <!-- Status Test -->
+                <div>
+                    <label for="tests-status_test" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Status Test") }}</label>
+                    <x-select class="w-full lg:w-auto" id="tests-status_test" wire:model.live="status_test">
+                        <option value=""></option>
+                        <option value="new">New</option>
+                        <option value="retest">Retest</option>
+                    </x-select>
+                </div>
+                <!-- End Status Test -->
+                 <!-- shift -->
+                <div>
+                    <label for="tests-shift" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Shift") }}</label>
+                    <x-select class="w-full lg:w-auto" id="tests-shift" wire:model.live="shift">
+                        <option value=""></option>
+                        <option value="A">A</option>
+                        <option value="B">B</option>
+                        <option value="C">C</option>
+                    </x-select>
+                </div>
+                <!-- End Shift -->
             </div>
             <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
             <div class="grow flex justify-between gap-x-2 items-center">
@@ -295,6 +330,7 @@ new class extends Component {
                         <th>{{ __("TC90") }}</th>
                         <th>{{ __("Hasil") }}</th>
                         <th>{{ __("M") }}</th>
+                        <th>{{ __("Shift") }}</th>
                         <th>{{ __("Operator") }}</th>
                     </tr>
                     @foreach ($tests as $test)
@@ -307,7 +343,19 @@ new class extends Component {
                             "
                         >
                             <td>{{ $test->test_created_at }}</td>
-                            <td>{{ $test->batch_code }}</td>
+                            <td>
+                                {{ $test->batch_code }}
+                                <x-pill
+                                    class="uppercase text-xs"
+                                    color="{{
+                                $test->status_test === 'new' ? 'yellow' :
+                                ($test->status_test === 'retest' ? 'blue' :
+                                'neutral')
+                                }}"
+                                >
+                                    {{ $test->status_test }}
+                                </x-pill>
+                            </td>
                             <td>{{ $test->batch_code_alt }}</td>
                             <td>{{ $test->batch_model ? $test->batch_model : "-" }}</td>
                             <td>{{ $test->batch_color ? $test->batch_color : "-" }}</td>
@@ -328,7 +376,7 @@ new class extends Component {
                                 </x-pill>
                             </td>
                             <td>{{ $test->machine_number }}</td>
-
+                            <td>{{ $test->shift ?? "-" }}</td>
                             <td>{{ ($test->user_emp_id ?? "") . " - " . ($test->user_name ?? "") }}</td>
                         </tr>
                     @endforeach

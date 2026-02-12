@@ -5,7 +5,7 @@ use Livewire\Attributes\On;
 use App\Traits\HasDateRangeFilter;
 use App\Models\InsDwpDevice;
 use App\Models\InsDwpCount;
-use App\Models\LogDwpUptime;
+use App\Models\UptimeLog;
 use App\Models\InsDwpTimeAlarmCount;
 use Livewire\WithPagination;
 use Livewire\Attributes\Url;
@@ -720,24 +720,47 @@ new class extends Component {
     }
 
     /**
-     * Calculate online monitoring statistics from LogDwpUptime
+     * Calculate online monitoring statistics from UptimeLog
      * ONLY WITHIN WORKING HOURS (07:00 - 17:00)
      * 
      * Logic:
-     * - Query LogDwpUptime for the selected line's device
+     * - Get device for the selected line and map IP to project name
+     * - Query UptimeLog for the project name
      * - Calculate online, offline, and timeout durations ONLY during 07:00-17:00
      * - Return percentages and formatted time strings
      */
     private function getOnlineMonitoringStats(string $line): array
     {
-        // Get device ID for the selected line
+        // Get device for the selected line
         $device = InsDwpDevice::whereJsonContains('config', [['line' => strtoupper($line)]])
-            ->select('id')
+            ->select('id', 'ip_address')
             ->first();
 
-        if (!$device) {
+        if (!$device || !isset($device->ip_address)) {
             return [
-            'percentages' => ['online' => 0, 'offline' => 0, 'timeout' => 0],
+                'percentages' => ['online' => 0, 'offline' => 0, 'timeout' => 0],
+                'total_hours' => 0,
+                'full_time_format' => "0 hours 0 minutes 0 seconds",
+                'offline_time_format' => "0 hours 0 minutes 0 seconds",
+                'timeout_time_format' => "0 hours 0 minutes 0 seconds"
+            ];
+        }
+
+        // Map device IP address to project name from config
+        $allProjects = config('uptime.projects', []);
+        $projectName = null;
+        foreach ($allProjects as $name => $info) {
+            if (isset($info['ip']) && $info['ip'] === $device->ip_address) {
+                $projectName = $info['name'];
+                break;
+            }
+        }
+
+        if (!$projectName) {
+            return [
+                'percentages' => ['online' => 0, 'offline' => 0, 'timeout' => 0],
+                'total_hours' => 0,
+                'full_time_format' => "0 hours 0 minutes 0 seconds",
                 'offline_time_format' => "0 hours 0 minutes 0 seconds",
                 'timeout_time_format' => "0 hours 0 minutes 0 seconds"
             ];
@@ -746,68 +769,16 @@ new class extends Component {
         // Get date range
         $startDate = $this->start_at ? Carbon::parse($this->start_at)->startOfDay() : Carbon::today()->startOfDay();
         $endDate = $this->end_at ? Carbon::parse($this->end_at)->endOfDay() : Carbon::today()->endOfDay();
-        $currentTime = Carbon::now();
-        
-        // Query all uptime logs for this device in the date range - ONLY WORKING HOURS (07:00-17:00)
-        $logs = LogDwpUptime::where('ins_dwp_device_id', $device->id)
-            ->whereBetween('logged_at', [$startDate, $endDate])
-            ->whereRaw('HOUR(logged_at) >= 7 AND HOUR(logged_at) < 17')
-            ->orderBy('logged_at', 'asc')
-            ->get();
 
-        if ($logs->isEmpty()) {
-            return [
-            'percentages' => ['online' => 0, 'offline' => 0, 'timeout' => 0],
-                'offline_time_format' => "0 hours 0 minutes 0 seconds",
-                'timeout_time_format' => "0 hours 0 minutes 0 seconds"
-            ];
-        }
+        // Working hours: 7 AM to 17 PM
+        $workingStart = $startDate->copy()->setHour(7)->setMinute(0)->setSecond(0);
+        $workingEnd = $endDate->copy()->setHour(17)->setMinute(0)->setSecond(0);
 
-        // === CALCULATE DURATIONS ONLY WITHIN WORKING HOURS (07:00 - 17:00) ===
-        $onlineDuration = 0;
-        $offlineDuration = 0;
-        $timeoutDuration = 0;
+        // Calculate durations using the same logic as BPM
+        $onlineDuration = $this->calculateTotalOnlineDuration($projectName, $workingStart, $workingEnd);
+        $offlineDuration = $this->calculateTotalOfflineDuration($projectName, $workingStart, $workingEnd);
+        $timeoutDuration = $this->calculateTotalTimeoutDuration($projectName, $workingStart, $workingEnd);
 
-        foreach ($logs as $index => $log) {
-            $logTime = Carbon::parse($log->logged_at);
-            
-            // Get next log or end of working hours
-            $nextLog = $logs->get($index + 1);
-            if ($nextLog) {
-                $nextLogTime = Carbon::parse($nextLog->logged_at);
-            } else {
-                // If this is the last log, calculate until now or end of working hours (17:00)
-                $endOfWorkingHours = Carbon::parse($log->logged_at)->setTime(17, 0, 0);
-                $nextLogTime = $currentTime->lt($endOfWorkingHours) ? $currentTime : $endOfWorkingHours;
-            }
-            
-            // Calculate duration only within working hours
-            $duration = $logTime->diffInSeconds($nextLogTime);
-            
-            // Make sure we don't count beyond 17:00
-            $workEndTime = Carbon::parse($logTime->format('Y-m-d'))->setTime(17, 0, 0);
-            if ($nextLogTime->gt($workEndTime)) {
-                $nextLogTime = $workEndTime;
-                $duration = $logTime->diffInSeconds($nextLogTime);
-            }
-            
-            // Only count if duration is positive and within working hours
-            if ($duration > 0 && $logTime->hour >= 7 && $logTime->hour < 17) {
-                switch ($log->status) {
-                    case 'online':
-                        $onlineDuration += $duration;
-                        break;
-                    case 'offline':
-                        $offlineDuration += $duration;
-                        break;
-                    case 'timeout':
-                        $timeoutDuration += $duration;
-                        break;
-                }
-            }
-        }
-
-        // Calculate total tracked duration (maximum 10 hours per day in working hours)
         $totalDuration = $onlineDuration + $offlineDuration + $timeoutDuration;
 
         // Calculate percentages
@@ -820,6 +791,141 @@ new class extends Component {
             'offline_time_format' => $this->formatDuration($offlineDuration),
             'timeout_time_format' => $this->formatDuration($timeoutDuration)
         ];
+    }
+
+    /**
+     * Calculate total online duration from UptimeLog
+     */
+    private function calculateTotalOnlineDuration(string $projectName, Carbon $start, Carbon $end): int
+    {
+        // Get all status change logs within the date range, ordered by time
+        $logs = UptimeLog::where('project_name', $projectName)
+            ->whereBetween('checked_at', [$start, $end])
+            ->orderBy('checked_at', 'asc')
+            ->get();
+
+        if ($logs->isEmpty()) {
+            return 0;
+        }
+
+        $totalOnlineSeconds = 0;
+        $onlineStartTime = null;
+
+        foreach ($logs as $log) {
+            if ($log->status === 'online') {
+                if ($onlineStartTime === null) {
+                    // Start of an online period
+                    $onlineStartTime = $log->checked_at;
+                }
+            } else {
+                // Status changed to offline or idle
+                if ($onlineStartTime !== null) {
+                    // End of an online period, calculate duration
+                    $totalOnlineSeconds += $onlineStartTime->diffInSeconds($log->checked_at);
+                    $onlineStartTime = null;
+                }
+            }
+        }
+
+        // If still online at the end of the period, add the remaining duration
+        if ($onlineStartTime !== null) {
+            $endTime = Carbon::now()->min($end);
+            $totalOnlineSeconds += $onlineStartTime->diffInSeconds($endTime);
+        }
+
+        return $totalOnlineSeconds;
+    }
+
+    /**
+     * Calculate total offline duration from UptimeLog
+     */
+    private function calculateTotalOfflineDuration(string $projectName, Carbon $start, Carbon $end): int
+    {
+        // Get all status change logs within the date range, ordered by time
+        $logs = UptimeLog::where('project_name', $projectName)
+            ->whereBetween('checked_at', [$start, $end])
+            ->orderBy('checked_at', 'asc')
+            ->get();
+
+        if ($logs->isEmpty()) {
+            return 0;
+        }
+
+        $totalOfflineSeconds = 0;
+        $count = $logs->count();
+        for ($i = 0; $i < $count; $i++) {
+            $log = $logs[$i];
+            if ($log->status === 'offline') {
+                // Find next log as end of offline period
+                $startOffline = $log->checked_at;
+                $endOffline = null;
+                for ($j = $i + 1; $j < $count; $j++) {
+                    if ($logs[$j]->status !== 'offline') {
+                        $endOffline = $logs[$j]->checked_at;
+                        break;
+                    }
+                }
+                if ($endOffline === null) {
+                    // If no next log that is not offline, use $end or current time
+                    $endOffline = Carbon::now()->min($end);
+                }
+                $totalOfflineSeconds += $startOffline->diffInSeconds($endOffline);
+
+                // Skip to log after offline period
+                while ($i + 1 < $count && $logs[$i + 1]->status === 'offline') {
+                    $i++;
+                }
+            }
+        }
+
+        return $totalOfflineSeconds;
+    }
+
+    /**
+     * Calculate total timeout duration from UptimeLog
+     * Timeout is considered as offline duration less than 300 seconds (5 minutes)
+     */
+    private function calculateTotalTimeoutDuration(string $projectName, Carbon $start, Carbon $end): int
+    {
+        // Get all status change logs within the date range, ordered by time
+        $logs = UptimeLog::where('project_name', $projectName)
+            ->whereBetween('checked_at', [$start, $end])
+            ->orderBy('checked_at', 'asc')
+            ->get();
+
+        if ($logs->isEmpty()) {
+            return 0;
+        }
+
+        $timeoutSeconds = 0;
+        $count = $logs->count();
+        for ($i = 0; $i < $count; $i++) {
+            $log = $logs[$i];
+            if ($log->status === 'offline') {
+                $startOffline = $log->checked_at;
+                $endOffline = null;
+                for ($j = $i + 1; $j < $count; $j++) {
+                    if ($logs[$j]->status !== 'offline') {
+                        $endOffline = $logs[$j]->checked_at;
+                        break;
+                    }
+                }
+                if ($endOffline === null) {
+                    $endOffline = Carbon::now()->min($end);
+                }
+                $duration = $startOffline->diffInSeconds($endOffline);
+                // Only count as timeout if duration is less than 300 seconds (5 minutes)
+                if ($duration < 300) {
+                    $timeoutSeconds += $duration;
+                }
+                // Skip to log after offline period
+                while ($i + 1 < $count && $logs[$i + 1]->status === 'offline') {
+                    $i++;
+                }
+            }
+        }
+
+        return $timeoutSeconds;
     }
 
     private function calculateMonitoringPercentages(int $totalDuration, int $onlineDuration, int $offlineDuration, int $timeoutDuration): array

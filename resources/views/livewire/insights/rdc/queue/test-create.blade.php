@@ -26,6 +26,7 @@ new class extends Component {
         "model" => "",
         "color" => "",
         "mcs" => "",
+        "shift" => "",
     ];
 
     public bool $update_batch = true;
@@ -49,6 +50,9 @@ new class extends Component {
         "tc50" => "",
         "tc90" => "",
         "eval" => "",
+        "shift" => "",
+        "material_type" => "",
+        "status_test" => "",
     ];
 
     public array $shoe_models = [];
@@ -75,6 +79,7 @@ new class extends Component {
             $this->batch["model"] = $batch->model;
             $this->batch["color"] = $batch->color;
             $this->batch["mcs"] = $batch->mcs;
+            $this->batch["shift"] = $batch->shift;
         } else {
             $this->handleNotFound();
         }
@@ -130,6 +135,9 @@ new class extends Component {
             "test.tc50" => "required|numeric|gte:0|lte:999",
             "test.tc90" => "required|numeric|gte:0|lte:999",
             "test.eval" => "required|in:pass,fail",
+            "test.shift" => "required|in:A,B,C",
+            "test.material_type" => "required|string",
+            "test.status_test" => "required|in:new,retest,skip",
         ];
     }
 
@@ -693,6 +701,14 @@ new class extends Component {
                 <label for="test-mcs" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("MCS") }}</label>
                 <x-text-input id="test-mcs" wire:model="batch.mcs" type="text" />
             </div>
+            <div class="mt-6">
+                <label for="test-status_test" class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Status Test") }}</label>
+                <x-select class="w-full" id="test-status_test" wire:model="test.status_test">
+                    <option value=""></option>
+                    <option value="new">New</option>
+                    <option value="retest">Retest</option>
+                </x-select>
+            </div>
         </div>
         <div class="col-span-4 px-6">
             <div
@@ -741,6 +757,37 @@ new class extends Component {
                         <span x-show="selectedMachine?.type === 'excel'">XLS</span>
                         <span x-show="selectedMachine?.type === 'txt'">TXT</span>
                     </x-secondary-button>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-2 mt-6 gap-x-3">
+                <div>
+                    <div class="my-6">
+                        <x-pill class="uppercase">{{ __("Shift") }}</x-pill>
+                    </div>
+                    <x-select class="w-full" id="test-shift" wire:model="test.shift">
+                        <option value=""></option>
+                        <option value="A">A</option>
+                        <option value="B">B</option>
+                        <option value="C">C</option>
+                    </x-select>
+                </div>
+                <div>
+                    <div class="my-6">
+                        <x-pill class="uppercase">{{ __("Material Type") }}</x-pill>
+                    </div>
+                    <x-select class="w-full" id="test-material_type" wire:model="test.material_type">
+                        <option value=""></option>
+                        <option value="SOLID_RUBBER">SOLID RUBBER</option>
+                        <option value="CLEAR_RUBBER">CLEAR RUBBER</option>
+                        <option value="TCB">TCB</option>
+                        <option value="EXWO_SOLID_RUBBER">EX WOOL SOLID RUBBER</option>
+                        <option value="EXWO_CLEAR_RUBBER">EX WOOL CLEAR RUBBER</option>
+                        <option value="EXPER_SOLID_RUBBER">EXPER SOLID RUBBER</option>
+                        <option value="EXPER_CLEAR_RUBBER">EXPER CLEAR RUBBER</option>
+                        <option value="EXPER_IP_12">EXPER IP 12</option>
+                        <option value="EXPER_IP_15">EXPER IP 15</option>
+                        <option value="SCRAP_RUBBER">SCRAP RUBBER</option>
+                    </x-select>
                 </div>
             </div>
 

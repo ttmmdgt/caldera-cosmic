@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DownloadController;
+use App\Http\Controllers\AutocompleteController;
 use App\Http\Resources\InsRtcMetricResource;
 use App\Http\Resources\InsRtcRecipeResource;
 use App\Models\InsRtcMetric;
@@ -15,9 +16,17 @@ Volt::route('/inventory/help', 'inventory.help')->name('inventory.help');
 
 Volt::route('/announcements/{id}', 'announcements.show')->name('announcements.show');
 
+// Autocomplete routes
+Route::name('autocomplete.')->group(function () {
+    Route::get('/autocomplete/search', [AutocompleteController::class, 'search'])->name('search');
+    Route::get('/autocomplete/rubber-colors', [AutocompleteController::class, 'searchRubberColors'])->name('rubber-colors');
+    Route::get('/autocomplete/rubber-models', [AutocompleteController::class, 'searchRubberModels'])->name('rubber-models');
+});
 // Uptime Monitoring routes
 Volt::route('/uptime', 'uptime.monitor')->name('uptime.monitor');
-
+Volt::route('/uptime/dashboard', 'uptime.dashboard')->name('uptime.dashboard');
+Volt::route('/uptime/projects', 'uptime.projects.index')->name('uptime.projects.index');
+Volt::route('/uptime/projects/workhours', 'uptime.projects.workhours')->name('uptime.projects.workhours');  
 // Insights routes
 Route::prefix('insights')->group(function () {
 
@@ -202,9 +211,12 @@ Route::prefix('insights')->group(function () {
 
         Volt::route('/omv/manage/authorizations', 'insights.omv.manage.auths')->name('manage.auths');
         Volt::route('/omv/manage/recipes', 'insights.omv.manage.recipes')->name('manage.recipes');
+        Volt::route('/omv/manage/colors', 'insights.omv.manage.colors')->name('manage.colors');
+        Volt::route('/omv/manage/models', 'insights.omv.manage.models')->name('manage.models');
         Volt::route('/omv/manage', 'insights.omv.manage.index')->name('manage.index');
         Volt::route('/omv/data', 'insights.omv.data.index')->name('data.index');
         Volt::route('/omv/create', 'insights.omv.create.index')->name('create.index');
+        Volt::route('/v1/omv/create', 'insights.omv.create.index-new')->name('create.index-new');
         Route::get('/omv', function () {
             if (auth()->check()) {
                 return redirect()->route('insights.omv.create.index');
@@ -284,6 +296,9 @@ Route::prefix('insights')->group(function () {
 
     });
 
+    // ============================================//
+    // BPM ROUTES
+    // ============================================//
     Route::name('insights.bpm.')->group(function () {
         Volt::route('/bpm/data', 'insights.bpm.data.index')->name('data.index');
         Volt::route('/bpm/manage/authorizations', 'insights.bpm.manage.auths')->name('manage.auths');
@@ -293,6 +308,16 @@ Route::prefix('insights')->group(function () {
         Route::get('/bpm', function () {
             return redirect()->route('insights.bpm.data.index');
         })->name('index');
+    });
+
+    // ============================================//
+    // PDS ROUTES
+    // ============================================//
+    Route::name('insights.pds.')->group(function () {
+        Volt::route('/pds/data', 'insights.pds.data.index')->name('data.index');
+        Volt::route('/pds/manage/authorizations', 'insights.pds.manage.auths')->name('manage.auths');
+        Volt::route('/pds/manage/devices', 'insights.pds.manage.devices')->name('manage.devices');
+        Volt::route('/pds/manage', 'insights.pds.manage.index')->name('manage.index');
     });
 
     Volt::route('/', 'insights.index')->name('insights');

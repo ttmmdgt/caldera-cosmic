@@ -25,7 +25,7 @@ new class extends Component {
     public string $machine = "";
 
     #[Url]
-    public string $condition = "";
+    public string $condition = "all";
 
     public int $perPage = 20;
     public $view = "raw";
@@ -54,7 +54,7 @@ new class extends Component {
             $query->where("machine", "like", "%" . strtoupper(trim($this->machine)) . "%");
         }
 
-        if ($this->condition) {
+        if ($this->condition !== "all") {
             $query->where("condition", $this->condition);
         }
 

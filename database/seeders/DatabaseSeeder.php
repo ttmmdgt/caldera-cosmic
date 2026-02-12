@@ -19,6 +19,13 @@ class DatabaseSeeder extends Seeder
         //     'email' => 'test@example.com',
         // ]);
 
+        // Project and Working Hours Configuration Seeders
+        $this->call([
+            ProjectSeeder::class,
+            ShiftSeeder::class,
+            ProjectWorkingHourSeeder::class,
+        ]);
+
         // DWP (Deep-Well Press) seeders
         if (app()->environment(['local', 'testing'])) {
             $this->call([

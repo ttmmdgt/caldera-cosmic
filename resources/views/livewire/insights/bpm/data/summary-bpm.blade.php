@@ -185,17 +185,20 @@ new class extends Component {
             return $item->line . '-' . $item->machine . '-' . $item->condition;
         })->map->first();
 
-        // Get ranking data - grouped by line and machine
+        // Get all detail data - show all line-machine combinations
         $this->rankingData = $latestRecords->groupBy(function($item) {
             return $item->line . '-' . $item->machine;
         })->map(function($items) {
             $first = $items->first();
             return (object) [
-                'line' => $first->line,
+                'line' => $this->plant . $first->line,
                 'machine' => $first->machine,
                 'total_counter' => $items->sum('cumulative')
             ];
-        })->sortByDesc('total_counter')->take(16)->values();
+        })->sortBy(function($item) {
+            // Sort by line then machine naturally
+            return $item->line . '-' . str_pad($item->machine, 3, '0', STR_PAD_LEFT);
+        })->values();
     }
 
     public function generateEmergencyChart()
@@ -220,13 +223,16 @@ new class extends Component {
             })->map(function($items, $key) {
                 $parts = explode('-', $key);
                 return [
-                    'line' => $this->plant .$parts[0],
+                    'line' => $this->plant . $parts[0],
                     'machine' => $parts[1],
                     'total' => $items->sum('cumulative'),
-                    'hot' => $items->where('condition', 'hot')->first()->cumulative ?? 0,
-                    'cold' => $items->where('condition', 'cold')->first()->cumulative ?? 0,
+                    'hot' => $items->where('condition', 'hot')->sum('cumulative'),
+                    'cold' => $items->where('condition', 'cold')->sum('cumulative'),
                 ];
-            })->take(20)->values();
+            })->sortBy(function($item) {
+                // Sort by line then machine naturally
+                return $item['line'] . '-' . str_pad($item['machine'], 3, '0', STR_PAD_LEFT);
+            })->values();
             
             // Format labels
             $labels = $lineMachines->map(function($item) {
@@ -263,11 +269,13 @@ new class extends Component {
                 })
                 ->map->first();
 
-            // Format labels and extract data
-            $sortedData = $emergencyData->sortByDesc('cumulative')->take(20);
+            // Format labels and extract data - keep all machines
+            $sortedData = $emergencyData->sortBy(function($item) {
+                return $item->line . '-' . str_pad($item->machine, 3, '0', STR_PAD_LEFT);
+            });
             
             $labels = $sortedData->map(function($item) {
-                return $item->line . ' - Mesin ' . $item->machine;
+                return $this->plant . $item->line . ' - Mesin ' . $item->machine;
             })->values()->toArray();
             
             $data = $sortedData->pluck('cumulative')->map(function($value) {
@@ -603,16 +611,16 @@ new class extends Component {
                 @endforeach
             </div>
 
-            {{-- Ranking Table --}}
+            {{-- Detail Table --}}
             <div class="bg-white dark:bg-neutral-800 rounded-lg shadow">
                 <div class="p-4 border-b border-neutral-200 dark:border-neutral-700">
-                    <h2 class="font-semibold">Ranking Emergency Counter</h2>
+                    <h2 class="font-semibold">Emergency Counter Detail</h2>
                 </div>
                 <div class="overflow-auto max-h-96">
                     <table class="w-full text-sm">
                         <thead class="bg-gray-50 dark:bg-neutral-700 sticky top-0">
                             <tr>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">RANK</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">NO</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">LINE</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">MESIN</th>
                                 <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300">COUNTER</th>
@@ -622,7 +630,7 @@ new class extends Component {
                             @forelse($rankingData as $index => $item)
                             <tr class="hover:bg-gray-50 dark:hover:bg-neutral-700">
                                 <td class="px-4 py-2">{{ $index + 1 }}</td>
-                                <td class="px-4 py-2">{{ $item->line }}</td>
+                                <td class="px-4 py-2 font-medium">{{ $item->line }}</td>
                                 <td class="px-4 py-2">{{ $item->machine }}</td>
                                 <td class="px-4 py-2 text-right font-semibold text-red-600">{{ number_format($item->total_counter) }}</td>
                             </tr>

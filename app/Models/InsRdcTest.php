@@ -33,6 +33,7 @@ class InsRdcTest extends Model
         'tc90_low',
         'tc90_high',
         'type',
+        'shift',
     ];
 
     public function evalHuman(): string
