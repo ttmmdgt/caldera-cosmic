@@ -17,9 +17,9 @@ new #[Layout("layouts.app")] class extends Component {
     public function mount()
     {
         $this->view_titles = [
-            "dashboard" => __("Dashboard PDS"),
+            "dashboard" => __("Dashboard"),
             "raw" => __("Raw Data"),
-            "history" => __("History Dosing"),
+            "history" => __("History"),
         ];
 
         $this->view_icons = [
@@ -47,7 +47,7 @@ new #[Layout("layouts.app")] class extends Component {
             $this->view_titles = [
                 "dashboard" => __("Dashboard"),
                 "raw" => __("Raw Data"),
-                "history" => __("History Dosing"),
+                "history" => __("History"),
             ];
 
             $this->view_icons = [

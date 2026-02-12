@@ -318,6 +318,7 @@ Route::prefix('insights')->group(function () {
         Volt::route('/pds/manage/authorizations', 'insights.pds.manage.auths')->name('manage.auths');
         Volt::route('/pds/manage/devices', 'insights.pds.manage.devices')->name('manage.devices');
         Volt::route('/pds/manage', 'insights.pds.manage.index')->name('manage.index');
+        Volt::route('/pds/manage/formulas', 'insights.pds.manage.formulas')->name('manage.formulas');
     });
 
     Volt::route('/', 'insights.index')->name('insights');

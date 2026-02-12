@@ -6,7 +6,7 @@
                     <i class="icon-arrow-left"></i>
                 </x-link>
                 <div>
-                    <span class="hidden sm:inline">{{ __('Pemantauan pH Dosing') }}</span>
+                    <span class="hidden sm:inline">{{ __('Pemantauan pH Dossing') }}</span>
                     <span class="sm:hidden inline">{{ __('PDS') }}</span>
                 </div>
             </h2>

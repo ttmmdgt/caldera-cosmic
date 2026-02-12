@@ -125,8 +125,32 @@ new #[Layout("layouts.app")] class extends Component {
                     @endforeach
                 </tbody>
             </table>
+        </div>
+
+        <!-- Infinite Scroll Trigger -->
+        @if($projects->hasMorePages())
+        <div 
+            x-data="{
+                observe() {
+                    const observer = new IntersectionObserver((entries) => {
+                        entries.forEach(entry => {
+                            if (entry.isIntersecting) {
+                                @this.call('loadMore');
+                            }
+                        });
+                    }, { threshold: 1.0 });
+                    observer.observe(this.$el);
+                }
+            }"
+            x-init="observe"
+            class="flex items-center justify-center py-4"
+        >
+            <div wire:loading wire:target="loadMore" class="text-neutral-500 dark:text-neutral-400 text-sm">
+                <i class="icon-spinner animate-spin"></i> Loading more projects...
             </div>
         </div>
+        @endif
+    </div>
     @else
         <div class="mt-6 p-6 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden">
             <div class="text-center text-neutral-500 dark:text-neutral-400">No projects found</div>

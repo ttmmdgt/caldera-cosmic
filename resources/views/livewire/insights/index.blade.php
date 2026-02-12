@@ -207,10 +207,11 @@ new #[Layout("layouts.app")] class extends Component {
 
     private function getCachedPhData(): int
     {
-        return Cache::remember("ph_data_recent", now()->addMinutes(30), function () {
+        return Cache::remember("ph_data_recent", now()->addMinutes(10), function () {
             $timeWindow = Carbon::now()->subHours(1);
             return InsPhDosingCount::where("updated_at", ">=", $timeWindow)
-                ->count();
+                ->distinct("device_id")
+                ->count("device_id");
         });
     }
 
@@ -226,6 +227,7 @@ new #[Layout("layouts.app")] class extends Component {
         Cache::forget("dwp_lines_recent");
         Cache::forget("bpm_lines_recent");
         Cache::forget("climate_data_ip");
+        Cache::forget("ph_data_recent");
         $this->isLoading = true;
         $this->loadMetrics();
     }

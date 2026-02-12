@@ -378,12 +378,6 @@ new class extends Component {
             </div>
             <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
             <div class="grow flex justify-between gap-x-2 items-center">
-                <div>
-                    <div class="px-3">
-                        <div wire:loading.class="hidden">{{ $counts->total() . " " . __("entri") }}</div>
-                        <div wire:loading.class.remove="hidden" class="hidden">{{ __("Memuat...") }}</div>
-                    </div>
-                </div>
                 <div class="flex gap-x-2">
                     <x-dropdown align="right" width="48">
                         <x-slot name="trigger">
@@ -399,10 +393,39 @@ new class extends Component {
                 </div>
             </div>
         </div>
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-2">
+            <!-- Right Side: Statistics -->
+            <!-- Top Row: Amount dossing & Dossing count -->
+                <!-- Amount dossing (gr) -->
+                <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
+                    <p class="text-lg font-semibold text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Amount dossing (gr)") }}</p>
+                    <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['total_dossing'] }}</h2>
+                </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-2">
+                <!-- Dossing count -->
+                <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
+                    <p class="text-lg font-semibold text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Dossing count") }}</p>
+                    <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['dossing_count'] }}</h2>
+                </div>
+
+            <!-- Bottom Row: Highest PH & Lowest PH -->
+                <!-- Highest PH -->
+                <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
+                    <p class="text-lg font-semibold text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Highest PH") }}</p>
+                    <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['highest_ph'] }}</h2>
+                </div>
+
+                <!-- Lowest PH -->
+                <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
+                    <p class="text-lg font-semibold text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Lowest PH") }}</p>
+                    <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['lowest_ph'] }}</h2>
+                </div>
+        </div>
+        <div class="mt-2">
             <!-- Left Side: Chart Area -->
-            <div class="lg:col-span-2 bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+                
+                <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Daily Trend Chart pH") ." (5 Minutes Interval)" }}</h3>
                 <div 
                     x-data="{ 
                         chartData: @js($chartData),
@@ -514,39 +537,6 @@ new class extends Component {
                     @chart-data-updated.window="chartData = $event.detail.chartData; renderChart(chartData)"
                 >
                     <div x-ref="chartContainer" style="height: 350px; min-height: 350px;"></div>
-                </div>
-            </div>
-
-            <!-- Right Side: Statistics -->
-            <div class="lg:col-span-1 space-y-3">
-                <!-- Top Row: Amount dossing & Dossing count -->
-                <div class="grid grid-cols-2 gap-3">
-                    <!-- Amount dossing (gr) -->
-                    <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
-                        <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Amount dossing (gr)") }}</p>
-                        <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['total_dossing'] }}</h2>
-                    </div>
-
-                    <!-- Dossing count -->
-                    <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
-                        <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Dossing count") }}</p>
-                        <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['dossing_count'] }}</h2>
-                    </div>
-                </div>
-
-                <!-- Bottom Row: Highest PH & Lowest PH -->
-                <div class="grid grid-cols-2 gap-3">
-                    <!-- Highest PH -->
-                    <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
-                        <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Highest PH") }}</p>
-                        <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['highest_ph'] }}</h2>
-                    </div>
-
-                    <!-- Lowest PH -->
-                    <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
-                        <p class="text-sm text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Lowest PH") }}</p>
-                        <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['lowest_ph'] }}</h2>
-                    </div>
                 </div>
             </div>
         </div>

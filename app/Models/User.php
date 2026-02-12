@@ -187,4 +187,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(InsBpmAuth::class);
     }
+
+    public function ins_ph_dosing_auths(): HasMany
+    {
+        return $this->hasMany(InsPhDosingAuth::class);
+    }
 }
