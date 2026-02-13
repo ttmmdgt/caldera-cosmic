@@ -9,6 +9,7 @@ use App\Models\InsPhDosingDevice;
 use App\Traits\HasDateRangeFilter;
 use App\Models\InsPhDosingLog;
 use Carbon\Carbon;
+use Illuminate\Pagination\LengthAwarePaginator;
 
 new class extends Component {
     use WithPagination;
@@ -26,6 +27,37 @@ new class extends Component {
     public int $perPage = 20;
     public $view = "history";
 
+    public $stdMinPh = 2;
+    public $stdMaxPh = 3;
+
+    public function getStdMinPh()
+    {
+        try {
+            $device = InsPhDosingDevice::where("id", $this->plant)->first();
+            if (!$device || !$device->config) {
+                return 2;
+            }
+            $dataJson = $device->config;
+            return $dataJson['standard_ph']['min'] ?? 2;
+        } catch (\Exception $e) {
+            return 2;
+        }
+    }
+
+    public function getStdMaxPh()
+    {
+        try {
+            $device = InsPhDosingDevice::where("id", $this->plant)->first();
+            if (!$device || !$device->config) {
+                return 3;
+            }
+            $dataJson = $device->config;
+            return $dataJson['standard_ph']['max'] ?? 3;
+        } catch (\Exception $e) {
+            return 3;
+        }
+    }
+
     public function mount()
     {
         if (! $this->start_at || ! $this->end_at) {
@@ -36,191 +68,245 @@ new class extends Component {
             $this->start_at = Carbon::parse($this->start_at)->toDateString();
             $this->end_at   = Carbon::parse($this->end_at)->toDateString();
         }
+        $this->stdMinPh = $this->getStdMinPh();
+        $this->stdMaxPh = $this->getStdMaxPh();
         $this->dispatch("update-menu", $this->view);
     }
 
-    public function updated($propertyName)
+    public function updatedStartAt()
     {
-        // Dispatch event to update chart when filters change
-        if (in_array($propertyName, ['start_at', 'end_at', 'plant'])) {
-            $this->dispatch('chart-data-updated', chartData: $this->getChartData());
-        }
+        $this->resetPage();
+    }
+    
+    public function updatedEndAt()
+    {
+        $this->resetPage();
+    }
+    
+    public function updatedPlant()
+    {
+        $this->stdMinPh = $this->getStdMinPh();
+        $this->stdMaxPh = $this->getStdMaxPh();
+        $this->resetPage();
+    }
+
+    #[On('update')]
+    public function refreshChart(): void
+    {
+        $this->dispatch('chart-data-updated', chartData: $this->getChartData());
     }
     
     public function getStatistics()
     {
-        $dataLog = InsPhDosingLog::with('device')
-            ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
+        try {
+            $dataLog = InsPhDosingLog::with('device')
+                ->where("dosing_amount", ">", 0)
+                ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
 
-        $dataPh = InsPhDosingCount::with('device')
-            ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
-        
-        if ($this->plant) {
-            $dataLog->whereHas('device', function($q) {
-                $q->where('id', $this->plant);
-            });
-            $dataPh->whereHas('device', function($q) {
-                $q->where('id', $this->plant);
-            });
-        }
-        
-        $dataPh = $dataPh->orderBy("created_at", "ASC")->get();
-        $dataLog = $dataLog->orderBy("created_at", "ASC")->get();
+            $dataPh = InsPhDosingCount::with('device')
+                ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
+            
+            if ($this->plant) {
+                $dataLog->whereHas('device', function($q) {
+                    $q->where('id', $this->plant);
+                });
+                $dataPh->whereHas('device', function($q) {
+                    $q->where('id', $this->plant);
+                });
+            }
+            
+            $dataPh = $dataPh->orderBy("created_at", "ASC")->get();
+            $dataLog = $dataLog->orderBy("created_at", "ASC")->get();
 
-        // Group data by 5-minute intervals
-        $fiveMinuteStats = [];
-        
-        // Process pH data - same approach as getChartData()
-        foreach ($dataPh as $count) {
-            $timestamp = Carbon::parse($count->created_at);
-            
-            // Round to nearest 5-minute interval
-            $minute = $timestamp->minute;
-            $roundedMinute = floor($minute / 5) * 5;
-            $roundedTimestamp = $timestamp->copy()->second(0)->minute($roundedMinute);
-            
-            // Create 5-minute interval key (format: Y-m-d H:i:00)
-            $intervalKey = $roundedTimestamp->format('Y-m-d H:i:00');
-            
-            // Extract ph value from the ph_value array/json
-            // Handle both seeder format ('current') and polling format ('current_ph')
-            if (is_array($count->ph_value)) {
-                $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? 0;
-            } else {
-                $phValue = 0;
+            // Return empty statistics if no data
+            if ($dataPh->isEmpty() && $dataLog->isEmpty()) {
+                return $this->getEmptyStatistics();
             }
+
+            // Group data by 5-minute intervals
+            $fiveMinuteStats = [];
             
-            // Initialize interval if not exists
-            if (!isset($fiveMinuteStats[$intervalKey])) {
-                $fiveMinuteStats[$intervalKey] = [
-                    'timestamp' => $roundedTimestamp,
-                    'ph_sum' => 0,
-                    'ph_count' => 0,
-                    'ph_max' => 0,
-                    'ph_min' => PHP_FLOAT_MAX,
-                    'dosing_amounts' => [],
-                    'dosing_count' => 0,
-                ];
-            }
-            
-            // Accumulate pH values using sum/count approach
-            $phFloat = (float) $phValue;
-            $fiveMinuteStats[$intervalKey]['ph_sum'] += $phFloat;
-            $fiveMinuteStats[$intervalKey]['ph_count']++;
-            
-            // Track min/max pH
-            if ($phFloat > $fiveMinuteStats[$intervalKey]['ph_max']) {
-                $fiveMinuteStats[$intervalKey]['ph_max'] = $phFloat;
-            }
-            if ($phFloat < $fiveMinuteStats[$intervalKey]['ph_min']) {
-                $fiveMinuteStats[$intervalKey]['ph_min'] = $phFloat;
-            }
-        }
-        
-        // Process dosing log data
-        foreach ($dataLog as $log) {
-            $timestamp = Carbon::parse($log->created_at);
-            
-            // Round to nearest 5-minute interval
-            $minute = $timestamp->minute;
-            $roundedMinute = floor($minute / 5) * 5;
-            $roundedTimestamp = $timestamp->copy()->second(0)->minute($roundedMinute);
-            
-            // Create 5-minute interval key
-            $intervalKey = $roundedTimestamp->format('Y-m-d H:i:00');
-            
-            // Initialize interval if not exists
-            if (!isset($fiveMinuteStats[$intervalKey])) {
-                $fiveMinuteStats[$intervalKey] = [
-                    'timestamp' => $roundedTimestamp,
-                    'ph_sum' => 0,
-                    'ph_count' => 0,
-                    'ph_max' => 0,
-                    'ph_min' => PHP_FLOAT_MAX,
-                    'dosing_amounts' => [],
-                    'dosing_count' => 0,
-                ];
-            }
-            
-            $fiveMinuteStats[$intervalKey]['dosing_amounts'][] = $log->dosing_amount;
-            $fiveMinuteStats[$intervalKey]['dosing_count']++;
-        }
-        
-        // Calculate statistics for each interval and overall
-        $intervalStats = [];
-        $totalDossing = 0;
-        $dossingCount = 0;
-        $highestPh = 0;
-        $lowestPh = PHP_FLOAT_MAX;
-        
-        ksort($fiveMinuteStats);
-        
-        foreach ($fiveMinuteStats as $intervalKey => $data) {
-            // Calculate average pH using sum/count approach (same as getChartData)
-            $avgPh = $data['ph_count'] > 0 
-                ? $data['ph_sum'] / $data['ph_count'] 
-                : 0;
-            
-            $intervalDosing = !empty($data['dosing_amounts']) 
-                ? array_sum($data['dosing_amounts']) 
-                : 0;
-            
-            $maxPhInInterval = $data['ph_max'];
-            $minPhInInterval = $data['ph_min'] !== PHP_FLOAT_MAX ? $data['ph_min'] : 0;
-            
-            // Track overall statistics
-            $totalDossing += $intervalDosing;
-            $dossingCount += $data['dosing_count'];
-            
-            // Track highest and lowest AVERAGE pH (to match chart display)
-            if ($data['ph_count'] > 0) {
-                if ($avgPh > $highestPh) {
-                    $highestPh = $avgPh;
+            // Process pH data - same approach as getChartData()
+            foreach ($dataPh as $count) {
+                $timestamp = Carbon::parse($count->created_at);
+                
+                // Round to nearest 5-minute interval
+                $minute = $timestamp->minute;
+                $roundedMinute = floor($minute / 5) * 5;
+                $roundedTimestamp = $timestamp->copy()->second(0)->minute($roundedMinute);
+                
+                // Create 5-minute interval key (format: Y-m-d H:i:00)
+                $intervalKey = $roundedTimestamp->format('Y-m-d H:i:00');
+                
+                // Extract ph value from the ph_value array/json
+                // Handle both seeder format ('current') and polling format ('current_ph')
+                if (is_array($count->ph_value)) {
+                    $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? null;
+                } else {
+                    $phValue = null;
                 }
                 
-                if ($avgPh < $lowestPh) {
-                    $lowestPh = $avgPh;
+                // Skip invalid pH values
+                if ($phValue === null || !is_numeric($phValue)) {
+                    continue;
+                }
+                
+                // Initialize interval if not exists
+                if (!isset($fiveMinuteStats[$intervalKey])) {
+                    $fiveMinuteStats[$intervalKey] = [
+                        'timestamp' => $roundedTimestamp,
+                        'ph_sum' => 0,
+                        'ph_count' => 0,
+                        'ph_max' => 0,
+                        'ph_min' => PHP_FLOAT_MAX,
+                        'dosing_amounts' => [],
+                        'dosing_count' => 0,
+                    ];
+                }
+                
+                // Accumulate pH values using sum/count approach
+                $phFloat = (float) $phValue;
+                $fiveMinuteStats[$intervalKey]['ph_sum'] += $phFloat;
+                $fiveMinuteStats[$intervalKey]['ph_count']++;
+                
+                // Track min/max pH
+                if ($phFloat > $fiveMinuteStats[$intervalKey]['ph_max']) {
+                    $fiveMinuteStats[$intervalKey]['ph_max'] = $phFloat;
+                }
+                if ($phFloat < $fiveMinuteStats[$intervalKey]['ph_min']) {
+                    $fiveMinuteStats[$intervalKey]['ph_min'] = $phFloat;
                 }
             }
             
-            // Store interval statistics
-            $intervalStats[] = [
-                'interval' => $intervalKey,
-                'timestamp' => $data['timestamp']->format('Y-m-d H:i:s'),
-                'avg_ph' => round($avgPh, 2),
-                'max_ph' => round($maxPhInInterval, 2),
-                'min_ph' => round($minPhInInterval, 2),
-                'total_dosing' => $intervalDosing,
-                'dosing_count' => $data['dosing_count'],
+            // Process dosing log data
+            foreach ($dataLog as $log) {
+                $timestamp = Carbon::parse($log->created_at);
+                
+                // Round to nearest 5-minute interval
+                $minute = $timestamp->minute;
+                $roundedMinute = floor($minute / 5) * 5;
+                $roundedTimestamp = $timestamp->copy()->second(0)->minute($roundedMinute);
+                
+                // Create 5-minute interval key
+                $intervalKey = $roundedTimestamp->format('Y-m-d H:i:00');
+                
+                // Initialize interval if not exists
+                if (!isset($fiveMinuteStats[$intervalKey])) {
+                    $fiveMinuteStats[$intervalKey] = [
+                        'timestamp' => $roundedTimestamp,
+                        'ph_sum' => 0,
+                        'ph_count' => 0,
+                        'ph_max' => 0,
+                        'ph_min' => PHP_FLOAT_MAX,
+                        'dosing_amounts' => [],
+                        'dosing_count' => 0,
+                    ];
+                }
+                
+                // Safely get dosing amount
+                $dosingAmount = is_numeric($log->dosing_amount) ? (float) $log->dosing_amount : 0;
+                $fiveMinuteStats[$intervalKey]['dosing_amounts'][] = $dosingAmount;
+                $fiveMinuteStats[$intervalKey]['dosing_count']++;
+            }
+            
+            // Return empty statistics if no valid data after processing
+            if (empty($fiveMinuteStats)) {
+                return $this->getEmptyStatistics();
+            }
+            
+            // Calculate statistics for each interval and overall
+            $intervalStats = [];
+            $totalDossing = 0;
+            $dossingCount = 0;
+            $highestPh = 0;
+            $lowestPh = PHP_FLOAT_MAX;
+            
+            ksort($fiveMinuteStats);
+            
+            foreach ($fiveMinuteStats as $intervalKey => $data) {
+                // Calculate average pH using sum/count approach (same as getChartData)
+                $avgPh = $data['ph_count'] > 0 
+                    ? $data['ph_sum'] / $data['ph_count'] 
+                    : 0;
+                
+                $intervalDosing = !empty($data['dosing_amounts']) 
+                    ? array_sum($data['dosing_amounts']) 
+                    : 0;
+                
+                $maxPhInInterval = $data['ph_max'];
+                $minPhInInterval = $data['ph_min'] !== PHP_FLOAT_MAX ? $data['ph_min'] : 0;
+                
+                // Track overall statistics
+                $totalDossing += $intervalDosing;
+                $dossingCount += $data['dosing_count'];
+                
+                // Track highest and lowest AVERAGE pH (to match chart display)
+                if ($data['ph_count'] > 0) {
+                    if ($avgPh > $highestPh) {
+                        $highestPh = $avgPh;
+                    }
+                    
+                    if ($avgPh < $lowestPh) {
+                        $lowestPh = $avgPh;
+                    }
+                }
+                
+                // Store interval statistics
+                $intervalStats[] = [
+                    'interval' => $intervalKey,
+                    'timestamp' => $data['timestamp']->format('Y-m-d H:i:s'),
+                    'avg_ph' => round($avgPh, 2),
+                    'max_ph' => round($maxPhInInterval, 2),
+                    'min_ph' => round($minPhInInterval, 2),
+                    'total_dosing' => $intervalDosing,
+                    'dosing_count' => $data['dosing_count'],
+                ];
+            }
+            
+            // Set lowest pH to 0 if no data
+            if ($lowestPh === PHP_FLOAT_MAX) {
+                $lowestPh = 0;
+            }
+            
+            return [
+                'total_dossing' => $totalDossing,
+                'dossing_count' => $dossingCount,
+                'highest_ph' => round($highestPh, 2),
+                'lowest_ph' => round($lowestPh, 1),
+                'intervals' => $intervalStats,
             ];
+        } catch (\Exception $e) {
+            return $this->getEmptyStatistics();
         }
-        
-        // Set lowest pH to 0 if no data
-        if ($lowestPh === PHP_FLOAT_MAX) {
-            $lowestPh = 0;
-        }
-        
+    }
+    
+    private function getEmptyStatistics(): array
+    {
         return [
-            'total_dossing' => $totalDossing,
-            'dossing_count' => $dossingCount,
-            'highest_ph' => round($highestPh, 2),
-            'lowest_ph' => round($lowestPh, 1),
-            'intervals' => $intervalStats,
+            'total_dossing' => 0,
+            'dossing_count' => 0,
+            'highest_ph' => 0,
+            'lowest_ph' => 0,
+            'intervals' => [],
         ];
     }
 
-    function getUniquePlants()
+    public function getUniquePlants()
     {
-        return InsPhDosingDevice::orderBy("plant")
-            ->get()
-            ->pluck("plant", "id")
-            ->toArray();
+        try {
+            return InsPhDosingDevice::orderBy("plant")
+                ->get()
+                ->pluck("plant", "id")
+                ->toArray();
+        } catch (\Exception $e) {
+            return [];
+        }
     }
 
     public function getCountsQuery()
     {
         $query = InsPhDosingCount::with('device')
-            ->whereBetween("created_at", [$this->start_at, $this->end_at]);
+            ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
 
         if ($this->plant) {
             $query->whereHas('device', function($q) {
@@ -233,97 +319,203 @@ new class extends Component {
 
     public function getChartData()
     {
-        $data = InsPhDosingCount::with('device')
-            ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
+        try {
+            $data = InsPhDosingCount::with('device')
+                ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
 
-        if ($this->plant) {
-            $data->whereHas('device', function($q) {
-                $q->where('id', $this->plant);
-            });
-        }
-
-        $data = $data->orderBy("created_at", "ASC")->get();
-
-        // Group data by 5-minute intervals
-        $fiveMinuteData = [];
-        
-        foreach ($data as $count) {
-            $timestamp = Carbon::parse($count->created_at);
-            
-            // Round to nearest 5-minute interval
-            $minute = $timestamp->minute;
-            $roundedMinute = floor($minute / 5) * 5;
-            $roundedTimestamp = $timestamp->copy()->second(0)->minute($roundedMinute);
-            
-            // Create 5-minute interval key (format: Y-m-d H:i:00)
-            $intervalKey = $roundedTimestamp->format('Y-m-d H:i:00');
-            
-            // Extract ph value from the ph_value array/json
-            // Handle both seeder format ('current') and polling format ('current_ph')
-            if (is_array($count->ph_value)) {
-                $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? 0;
-            } else {
-                $phValue = 0;
+            if ($this->plant) {
+                $data->whereHas('device', function($q) {
+                    $q->where('id', $this->plant);
+                });
             }
-            
-            // Initialize 5-minute interval group if not exists
-            if (!isset($fiveMinuteData[$intervalKey])) {
-                $fiveMinuteData[$intervalKey] = [
-                    'sum' => 0,
-                    'count' => 0,
-                    'timestamp' => $roundedTimestamp
-                ];
-            }
-            
-            // Accumulate pH values
-            $fiveMinuteData[$intervalKey]['sum'] += (float) $phValue;
-            $fiveMinuteData[$intervalKey]['count']++;
-        }
 
-        // Calculate averages and prepare chart data
-        $chartData = [
+            $data = $data->orderBy("created_at", "ASC")->get();
+
+            // Fetch dosing log data
+            $dosingLogs = InsPhDosingLog::with('device')
+                ->where("dosing_amount", ">", 0)
+                ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
+
+            if ($this->plant) {
+                $dosingLogs->whereHas('device', function($q) {
+                    $q->where('id', $this->plant);
+                });
+            }
+
+            $dosingLogs = $dosingLogs->orderBy("created_at", "ASC")->get();
+
+            // Return empty chart data if no data exists
+            if ($data->isEmpty()) {
+                return $this->getEmptyChartData();
+            }
+
+            // Group data by 5-minute intervals
+            $fiveMinuteData = [];
+            
+            foreach ($data as $count) {
+                $timestamp = Carbon::parse($count->created_at);
+                
+                // Round to nearest 5-minute interval
+                $minute = $timestamp->minute;
+                $roundedMinute = floor($minute / 5) * 5;
+                $roundedTimestamp = $timestamp->copy()->second(0)->minute($roundedMinute);
+                
+                // Create 5-minute interval key (format: Y-m-d H:i:00)
+                $intervalKey = $roundedTimestamp->format('Y-m-d H:i:00');
+                
+                // Extract ph value from the ph_value array/json
+                // Handle both seeder format ('current') and polling format ('current_ph')
+                if (is_array($count->ph_value)) {
+                    $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? null;
+                } else {
+                    $phValue = null;
+                }
+                
+                // Skip invalid pH values
+                if ($phValue === null || !is_numeric($phValue)) {
+                    continue;
+                }
+                
+                // Initialize 5-minute interval group if not exists
+                if (!isset($fiveMinuteData[$intervalKey])) {
+                    $fiveMinuteData[$intervalKey] = [
+                        'sum' => 0,
+                        'count' => 0,
+                        'timestamp' => $roundedTimestamp,
+                        'has_dosing' => false
+                    ];
+                }
+                
+                // Accumulate pH values
+                $fiveMinuteData[$intervalKey]['sum'] += (float) $phValue;
+                $fiveMinuteData[$intervalKey]['count']++;
+            }
+
+            // Process dosing events and mark intervals
+            foreach ($dosingLogs as $log) {
+                $timestamp = Carbon::parse($log->created_at);
+                
+                // Round to nearest 5-minute interval
+                $minute = $timestamp->minute;
+                $roundedMinute = floor($minute / 5) * 5;
+                $roundedTimestamp = $timestamp->copy()->second(0)->minute($roundedMinute);
+                
+                // Create 5-minute interval key
+                $intervalKey = $roundedTimestamp->format('Y-m-d H:i:00');
+                
+                // Initialize interval if not exists (dosing event without pH reading in this window)
+                if (!isset($fiveMinuteData[$intervalKey])) {
+                    $fiveMinuteData[$intervalKey] = [
+                        'sum' => 0,
+                        'count' => 0,
+                        'timestamp' => $roundedTimestamp,
+                        'has_dosing' => false
+                    ];
+                }
+                
+                // Mark this interval as having dosing event
+                $fiveMinuteData[$intervalKey]['has_dosing'] = true;
+            }
+
+            // Return empty chart if no valid data after processing
+            if (empty($fiveMinuteData)) {
+                return $this->getEmptyChartData();
+            }
+
+            // Calculate averages and prepare chart data
+            $chartData = [
+                'labels' => [],
+                'phValues' => [],
+                'dosingMarkers' => [],
+            ];
+
+            // Determine if we need to show dates in labels (multi-day range)
+            $startDate = Carbon::parse($this->start_at);
+            $endDate = Carbon::parse($this->end_at);
+            $showDate = $startDate->diffInDays($endDate) > 0;
+
+            // Sort by interval key and build final arrays
+            ksort($fiveMinuteData);
+            
+            $lastKnownPh = null;
+            
+            foreach ($fiveMinuteData as $intervalKey => $intervalInfo) {
+                $hasPh = $intervalInfo['count'] > 0;
+                
+                // Skip intervals with no pH data to avoid NaN in SVG path rendering
+                // (dosing-only intervals produce null in the line series which breaks smooth curves)
+                if (!$hasPh) {
+                    continue;
+                }
+                
+                $avgPh = $intervalInfo['sum'] / $intervalInfo['count'];
+                $lastKnownPh = round($avgPh, 2);
+                
+                // Format label based on date range
+                if ($showDate) {
+                    $chartData['labels'][] = $intervalInfo['timestamp']->format('d/m H:i');
+                } else {
+                    $chartData['labels'][] = $intervalInfo['timestamp']->format('H:i');
+                }
+                
+                $chartData['phValues'][] = round($avgPh, 2);
+                
+                // Add dosing marker if this interval has dosing event
+                if ($intervalInfo['has_dosing']) {
+                    $chartData['dosingMarkers'][] = round($avgPh, 2);
+                } else {
+                    $chartData['dosingMarkers'][] = null;
+                }
+            }
+
+            return $chartData;
+        } catch (\Exception $e) {
+            return $this->getEmptyChartData();
+        }
+    }
+    
+    private function getEmptyChartData(): array
+    {
+        return [
             'labels' => [],
             'phValues' => [],
+            'dosingMarkers' => [],
         ];
-
-        // Determine if we need to show dates in labels (multi-day range)
-        $startDate = Carbon::parse($this->start_at);
-        $endDate = Carbon::parse($this->end_at);
-        $showDate = $startDate->diffInDays($endDate) > 0;
-
-        // Sort by interval key and build final arrays
-        ksort($fiveMinuteData);
-        
-        foreach ($fiveMinuteData as $intervalKey => $intervalInfo) {
-            $avgPh = $intervalInfo['count'] > 0 ? $intervalInfo['sum'] / $intervalInfo['count'] : 0;
-            
-            // Format label based on date range
-            if ($showDate) {
-                $chartData['labels'][] = $intervalInfo['timestamp']->format('d/m H:i');
-            } else {
-                $chartData['labels'][] = $intervalInfo['timestamp']->format('H:i');
-            }
-            
-            $chartData['phValues'][] = round($avgPh, 2);
-        }
-
-        return $chartData;
     }
 
     public function with(): array
     {
-        return [
-            'counts' => $this->getCountsQuery()->paginate($this->perPage),
-            'chartData' => $this->getChartData(),
-            'statistics' => $this->getStatistics(),
-        ];
+        try {
+            return [
+                'counts' => $this->getCountsQuery()->paginate($this->perPage),
+                'chartData' => $this->getChartData(),
+                'statistics' => $this->getStatistics(),
+            ];
+        } catch (\Exception $e) {
+            return [
+                'counts' => new LengthAwarePaginator([], 0, $this->perPage),
+                'chartData' => $this->getEmptyChartData(),
+                'statistics' => $this->getEmptyStatistics(),
+            ];
+        }
     }
 
 }; ?>
 
-<div>
+<div wire:poll.20s>
     <div class="p-0 sm:p-1 mb-6">
-        <div class="flex flex-col lg:flex-row gap-3 w-full bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-4">
+        <div class="relative flex flex-col lg:flex-row gap-3 w-full bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-4">
+            <!-- Loading Overlay -->
+            <div wire:loading wire:target="start_at,end_at,plant,setToday,setYesterday,setThisWeek,setLastWeek,setThisMonth,setLastMonth" class="absolute inset-0 bg-white/70 dark:bg-neutral-800/70 backdrop-blur-sm rounded-lg z-10 flex items-center justify-center">
+                <div class="flex flex-col items-center gap-3">
+                    <svg class="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span class="text-sm text-neutral-600 dark:text-neutral-400 font-medium">{{ __("Loading...") }}</span>
+                </div>
+            </div>
+
             <div>
                 <div class="flex mb-2 text-xs text-neutral-500">
                     <div class="flex">
@@ -360,13 +552,29 @@ new class extends Component {
                     </div>
                 </div>
                 <div class="flex gap-3">
-                    <x-text-input wire:model.live="start_at" type="date" class="w-40" />
-                    <x-text-input wire:model.live="end_at" type="date" class="w-40" />
+                    <div class="relative">
+                        <x-text-input wire:model.live="start_at" type="date" class="w-40" />
+                        <div wire:loading wire:target="start_at" class="absolute right-2 top-2">
+                            <svg class="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="relative">
+                        <x-text-input wire:model.live="end_at" type="date" class="w-40" />
+                        <div wire:loading wire:target="end_at" class="absolute right-2 top-2">
+                            <svg class="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
             <div class="grid grid-cols-3 gap-3">
-                <div>
+                <div class="relative">
                     <label class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Plant") }}</label>
                     <x-select wire:model.live="plant" class="w-full">
                         <option value="">{{ __("Semua") }}</option>
@@ -374,26 +582,17 @@ new class extends Component {
                             <option value="{{$id}}">{{$plantOption}}</option>
                         @endforeach
                     </x-select>
+                    <div wire:loading wire:target="plant" class="absolute right-3 top-9">
+                        <svg class="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </div>
                 </div>
             </div>
             <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
-            <div class="grow flex justify-between gap-x-2 items-center">
-                <div class="flex gap-x-2">
-                    <x-dropdown align="right" width="48">
-                        <x-slot name="trigger">
-                            <x-text-button><i class="icon-ellipsis-vertical"></i></x-text-button>
-                        </x-slot>
-                        <x-slot name="content">
-                            <x-dropdown-link href="#" wire:click.prevent="download('counts')">
-                                <i class="icon-download me-2"></i>
-                                {{ __("CSV Data") }}
-                            </x-dropdown-link>
-                        </x-slot>
-                    </x-dropdown>
-                </div>
-            </div>
         </div>
-        <div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-2">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-2" wire:key="statistics-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
             <!-- Right Side: Statistics -->
             <!-- Top Row: Amount dossing & Dossing count -->
                 <!-- Amount dossing (gr) -->
@@ -426,29 +625,58 @@ new class extends Component {
             <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
                 
                 <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Daily Trend Chart pH") ." (5 Minutes Interval)" }}</h3>
+                
+                @if(empty($chartData['labels']) || count($chartData['labels']) === 0)
+                    <div class="flex items-center justify-center" style="height: 350px;">
+                        <p class="text-neutral-500 dark:text-neutral-400 text-lg">{{ __("No data available for selected filters") }}</p>
+                    </div>
+                @else
                 <div 
+                    wire:key="chart-container-{{ md5(json_encode($chartData)) }}"
                     x-data="{ 
-                        chartData: @js($chartData),
                         chart: null,
+                        init() {
+                            this.$nextTick(() => this.initChart());
+                        },
+                        destroy() {
+                            if (this.chart) {
+                                try { this.chart.destroy(); } catch(e) {}
+                                this.chart = null;
+                            }
+                        },
                         initChart() {
                             if (typeof ApexCharts === 'undefined') {
                                 setTimeout(() => this.initChart(), 100);
                                 return;
                             }
-                            this.renderChart(this.chartData);
-                        },
-                        renderChart(data) {
-                            const chartElement = this.$refs.chartContainer;
-                            if (!chartElement || !data || !data.labels || !data.phValues) return;
                             
-                            if (this.chart) {
-                                this.chart.destroy();
+                            const chartElement = this.$refs.chartContainer;
+                            if (!chartElement) {
+                                return;
                             }
                             
-                            const phSeries = data.phValues || [];
-                            const labels = data.labels || [];
-                            const maxLimit = Array(labels.length).fill(3);
-                            const minLimit = Array(labels.length).fill(2);
+                            // Destroy existing chart
+                            if (this.chart) {
+                                try {
+                                    this.chart.destroy();
+                                } catch(e) {}
+                                this.chart = null;
+                            }
+                            
+                            const chartData = @js($chartData);
+                            const stdMinPh = {{ $stdMinPh }};
+                            const stdMaxPh = {{ $stdMaxPh }};
+                            
+                            const phSeries = chartData.phValues || [];
+                            const labels = chartData.labels || [];
+                            const dosingMarkers = chartData.dosingMarkers || [];
+                            
+                            if (labels.length === 0) {
+                                return;
+                            }
+                            
+                            const maxLimit = Array(labels.length).fill(stdMaxPh);
+                            const minLimit = Array(labels.length).fill(stdMinPh);
                             
                             const isDark = document.documentElement.classList.contains('dark');
                             const textColor = isDark ? '#d4d4d4' : '#525252';
@@ -457,8 +685,9 @@ new class extends Component {
                             const options = {
                                 series: [
                                     { name: 'Nilai pH', data: phSeries, type: 'line' },
-                                    { name: 'Batas Maksimal (pH 3)', data: maxLimit, type: 'line' },
-                                    { name: 'Batas Minimal (pH 2)', data: minLimit, type: 'line' }
+                                    { name: 'Batas Maksimal (pH ' + stdMaxPh + ')', data: maxLimit, type: 'line' },
+                                    { name: 'Batas Minimal (pH ' + stdMinPh + ')', data: minLimit, type: 'line' },
+                                    { name: 'Dosing Event', data: dosingMarkers, type: 'scatter' }
                                 ],
                                 chart: {
                                     height: 350,
@@ -470,14 +699,28 @@ new class extends Component {
                                     animations: { enabled: true, easing: 'easeinout', speed: 800 },
                                     background: 'transparent'
                                 },
-                                colors: ['#3b82f6', '#ef4444', '#ef4444'],
-                                stroke: { width: [3, 2, 2], curve: 'smooth', dashArray: [0, 5, 5] },
+                                colors: ['#3b82f6', '#ef4444', '#ef4444', '#10b981'],
+                                stroke: { width: [3, 2, 2, 0], curve: 'smooth', dashArray: [0, 5, 5, 0] },
                                 markers: {
-                                    size: [5, 0, 0],
-                                    colors: ['#3b82f6', '#ef4444', '#ef4444'],
+                                    size: [5, 0, 0, 0],
+                                    colors: ['#3b82f6', '#ef4444', '#ef4444', '#10b981'],
                                     strokeColors: '#fff',
                                     strokeWidth: 2,
-                                    hover: { size: 7 }
+                                    hover: { size: [7, 0, 0, 0] }
+                                },
+                                dataLabels: {
+                                    enabled: true,
+                                    enabledOnSeries: [3],
+                                    formatter: function(value) {
+                                        return value !== null && value !== undefined ? '▼' : '';
+                                    },
+                                    style: {
+                                        fontSize: '16px',
+                                        fontWeight: 'bold',
+                                        colors: ['#10b981']
+                                    },
+                                    background: { enabled: false },
+                                    offsetY: -5
                                 },
                                 xaxis: {
                                     categories: labels,
@@ -497,7 +740,12 @@ new class extends Component {
                                     tickAmount: 8,
                                     labels: {
                                         style: { colors: textColor, fontSize: '11px' },
-                                        formatter: function(value) { return value.toFixed(1); }
+                                        formatter: function(value) { 
+                                            if (value === null || value === undefined || isNaN(value)) {
+                                                return '0.0';
+                                            }
+                                            return Number(value).toFixed(1); 
+                                        }
                                     }
                                 },
                                 grid: {
@@ -518,38 +766,33 @@ new class extends Component {
                                     shared: true,
                                     intersect: false,
                                     theme: isDark ? 'dark' : 'light',
-                                    y: { formatter: function(value) { return value !== undefined ? value.toFixed(2) : 'N/A'; } }
+                                    y: { 
+                                        formatter: function(value) { 
+                                            if (value === null || value === undefined || isNaN(value)) {
+                                                return 'N/A';
+                                            }
+                                            return Number(value).toFixed(2); 
+                                        } 
+                                    }
                                 },
-                                theme: { mode: isDark ? 'dark' : 'light' },
-                                noData: {
-                                    text: 'No data available',
-                                    align: 'center',
-                                    verticalAlign: 'middle',
-                                    style: { color: textColor, fontSize: '14px' }
-                                }
+                                theme: { mode: isDark ? 'dark' : 'light' }
                             };
                             
-                            this.chart = new ApexCharts(chartElement, options);
-                            this.chart.render();
+                            try {
+                                this.chart = new ApexCharts(chartElement, options);
+                                this.chart.render();
+                            } catch(error) {
+                                console.error('Chart render error:', error);
+                            }
                         }
                     }"
-                    x-init="$nextTick(() => initChart())"
-                    @chart-data-updated.window="chartData = $event.detail.chartData; renderChart(chartData)"
+                    @caldera-theme-changed.window="initChart()"
                 >
-                    <div x-ref="chartContainer" style="height: 350px; min-height: 350px;"></div>
+                    <div x-ref="chartContainer" wire:ignore style="height: 350px; min-height: 350px;"></div>
                 </div>
+                @endif
             </div>
         </div>
     </div>
 
-    <!-- Theme Change Listener -->
-    <script>
-        // Update chart on theme change
-        window.addEventListener('caldera-theme-changed', function() {
-            // Dispatch event to re-render chart with new theme
-            window.dispatchEvent(new CustomEvent('chart-data-updated', {
-                detail: { chartData: @json($chartData) }
-            }));
-        });
-    </script>
 </div>

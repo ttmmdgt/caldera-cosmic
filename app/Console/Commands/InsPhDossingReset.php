@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\InsPhDossingDevice;
+use App\Models\InsPhDosingDevice;
 use Illuminate\Console\Command;
 use ModbusTcpClient\Composer\Write\WriteRegistersBuilder;
 use ModbusTcpClient\Network\NonBlockingClient;
@@ -31,7 +31,7 @@ class InsPhDossingReset extends Command
     public function handle()
     {
         // Get all active devices
-        $devices = InsPhDossingDevice::active()->get();
+        $devices = InsPhDosingDevice::active()->get();
 
         if ($devices->isEmpty()) {
             $this->error('✗ No active PH Dossing devices found');
@@ -64,10 +64,10 @@ class InsPhDossingReset extends Command
     /**
      * Reset a single device by writing 1 to all reset addresses
      */
-    private function resetDevice(InsPhDossingDevice $device)
+    private function resetDevice(InsPhDosingDevice $device)
     {
         $unit_id = 1; // Standard Modbus unit ID
-        $resetAddr = $device->config['addr_reset'] ?? null;
+        $resetAddr = 13;
         try {
             // Build Modbus coils
             $request = WriteCoilsBuilder::newWriteMultipleCoils(

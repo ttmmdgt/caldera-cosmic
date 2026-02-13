@@ -10,6 +10,7 @@ use App\Traits\HasDateRangeFilter;
 use App\Services\GetDataViaModbus;
 use App\Services\UptimeCalculatorService;
 use App\Services\DurationFormatterService;
+use App\Services\WorkingHoursService;
 use App\Models\Project;
 use Carbon\Carbon;
 
@@ -34,10 +35,13 @@ new class extends Component {
     #[Url]
     public string $condition = "all";
 
+    public $stdMinPh = 2;
+    public $stdMaxPh = 3;
+
     public int $perPage = 20;
     public $view = "raw";
     public $onlineStats = [];
-    public $statsByStatus = [];
+    
     public function mount()
     {
         if (! $this->start_at || ! $this->end_at) {
@@ -50,19 +54,42 @@ new class extends Component {
         }
         $this->dispatch("update-menu", $this->view);
         $this->loadOnlineStats();
-        $this->statsByStatus = $this->getStatsByStatus();
+        $this->stdMinPh = $this->getStdMinPh();
+        $this->stdMaxPh = $this->getStdMaxPh();
     }
 
-    public function updated($propertyName)
+    public function updatedStartAt()
     {
-        // Dispatch event to update chart when filters change
-        if (in_array($propertyName, ['start_at', 'end_at', 'plant'])) {
-            $this->dispatch('chart-data-updated', chartData: $this->getChartData());
-            $this->loadOnlineStats();
-            $this->dispatch('refresh-online-chart', onlineData: $this->prepareOnlineChartData());
-            $this->statsByStatus = $this->getStatsByStatus();
-            $this->dispatch('refresh-status-chart', statusData: $this->prepareStatusChartData());
-        }
+        $this->loadOnlineStats();
+        $this->resetPage();
+    }
+    
+    public function updatedEndAt()
+    {
+        $this->loadOnlineStats();
+        $this->resetPage();
+    }
+    
+    public function updatedPlant()
+    {
+        $this->stdMinPh = $this->getStdMinPh();
+        $this->stdMaxPh = $this->getStdMaxPh();
+        $this->loadOnlineStats();
+        $this->resetPage();
+    }
+
+    #[On('update')]
+    public function refreshCharts(): void
+    {
+        $this->loadOnlineStats();
+        $this->dispatch('chart-data-updated', chartData: $this->getChartData());
+        $this->dispatch('refresh-online-chart', onlineData: $this->prepareOnlineChartData());
+        $this->dispatch('refresh-status-chart', statusData: $this->prepareStatusChartData());
+    }
+    
+    public function statsByStatus()
+    {
+        return $this->getStatsByStatus();
     }
     
     private function loadOnlineStats(): void
@@ -82,9 +109,23 @@ new class extends Component {
         }
         
         $date = Carbon::parse($this->start_at);
-        $workingHours = config('bpm.working_hours', ['start' => 7, 'end' => 19]);
-        $start = $date->copy()->setTime($workingHours['start'], 0);
-        $end = $date->copy()->setTime($workingHours['end'], 0);
+        
+        // Use WorkingHoursService to get working hours
+        $workingHoursService = app(WorkingHoursService::class);
+        $workingHours = $workingHoursService->getProjectWorkingHours($project->id);
+        // Get the first working hour configuration or use default from config
+        if (!empty($workingHours)) {
+            $firstShift = $workingHours[0];
+            $startTime = Carbon::parse($firstShift['start_time']);
+            $endTime = Carbon::parse($firstShift['end_time']);
+            $start = $date->copy()->setTime($startTime->hour, $startTime->minute);
+            $end = $date->copy()->setTime($endTime->hour, $endTime->minute);
+        } else {
+            // Fallback to config if no working hours configured
+            $configHours = ['start' => 5.30, 'end' => 17.30];
+            $start = $date->copy()->setTime($configHours['start'], 0);
+            $end = $date->copy()->setTime($configHours['end'], 0);
+        }
         
         $calculator = app(UptimeCalculatorService::class);
         $stats = $calculator->calculateStats($project->name, $start, $end);
@@ -127,62 +168,172 @@ new class extends Component {
     }
 
     private function getStatsByStatus() {
-        $start = Carbon::parse($this->start_at);
-        $end = Carbon::parse($this->end_at);
-        $data = InsPhDosingCount::whereBetween("created_at", [$start->startOfDay(), $end->endOfDay()])
-            ->orderBy("created_at", "ASC")
-            ->get();
-        $normalCount = 0;
-        $highCount = 0;
-        $lowCount = 0;
-        foreach ($data as $count) {
-            $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? 0;
-            if ($phValue >= 2 && $phValue <= 3) {
-                $normalCount++;
-            } elseif ($phValue > 3) {
-                $highCount++;
-            } else {
-                $lowCount++;
+        try {
+            $start = Carbon::parse($this->start_at);
+            $end   = Carbon::parse($this->end_at);
+            
+            // Calculate number of days BEFORE modifying start/end with startOfDay/endOfDay
+            $numberOfDays = $start->diffInDays($end) + 1; // +1 to include both start and end dates
+            
+            $query = InsPhDosingCount::whereBetween("created_at", [$start->startOfDay(), $end->endOfDay()]);
+            
+            // Filter by plant if selected
+            if ($this->plant) {
+                $query->whereHas('device', function($q) {
+                    $q->where('id', $this->plant);
+                });
             }
+            
+            $data = $query->orderBy("created_at", "ASC")->get();
+            
+            // Return empty stats if no data
+            if ($data->isEmpty()) {
+                return $this->getEmptyStatusStats();
+            }
+            
+            $normalCount = 0;
+            $highCount = 0;
+            $lowCount = 0;
+            
+            foreach ($data as $count) {
+                // Safely extract pH value
+                if (is_array($count->ph_value)) {
+                    $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? null;
+                } else {
+                    $phValue = null;
+                }
+                
+                // Skip invalid pH values
+                if ($phValue === null || !is_numeric($phValue)) {
+                    continue;
+                }
+                
+                $phValue = (float) $phValue;
+                
+                if ($phValue >= $this->stdMinPh && $phValue <= $this->stdMaxPh) {
+                    $normalCount++;
+                } elseif ($phValue > $this->stdMaxPh) {
+                    $highCount++;
+                } else {
+                    $lowCount++;
+                }
+            }
+            
+            // Get working hours from WorkingHoursService
+            $device = $this->getActiveDevice();
+            $project = $device ? Project::where('ip', $device->ip_address)->first() : null;
+            
+            if ($project) {
+                $workingHoursService = app(WorkingHoursService::class);
+                $projectWorkingHours = $workingHoursService->getProjectWorkingHours($project->id);
+                
+                if (!empty($projectWorkingHours)) {
+                    $firstShift = $projectWorkingHours[0];
+                    $startTime = Carbon::parse($firstShift['start_time']);
+                    $endTime = Carbon::parse($firstShift['end_time']);
+                    
+                    // Handle night shifts (end time before start time)
+                    if ($endTime->lessThan($startTime)) {
+                        $endTime->addDay();
+                    }
+                    
+                    // Calculate total working minutes using diffInMinutes for precision
+                    $totalWorkingMinutesPerDay = $startTime->diffInMinutes($endTime);
+                    
+                    // Calculate break time from break_times array
+                    $breakMinutes = 0;
+                    if (!empty($firstShift['break_times'])) {
+                        foreach ($firstShift['break_times'] as $breakTime) {
+                            $breakStart = Carbon::parse($breakTime['start']);
+                            $breakEnd = Carbon::parse($breakTime['end']);
+                            
+                            // Handle breaks crossing midnight
+                            if ($breakEnd->lessThan($breakStart)) {
+                                $breakEnd->addDay();
+                            }
+                            
+                            $breakMinutes += $breakStart->diffInMinutes($breakEnd);
+                        }
+                    }
+                    
+                    // Subtract break time and ensure non-negative
+                    $totalWorkingMinutesPerDay = max(0, $totalWorkingMinutesPerDay - $breakMinutes);
+                    
+                    // Multiply by number of days in the date range
+                    $totalWorkingMinutes = $totalWorkingMinutesPerDay * $numberOfDays;
+                    $totalWorkingHours = $totalWorkingMinutes / 60;
+                } else {
+                    // Fallback to default if no working hours configured
+                    $totalWorkingHours = 8 * $numberOfDays;
+                    $totalWorkingMinutes = 480 * $numberOfDays;
+                }
+            } else {
+                // Fallback to default if no project found
+                $totalWorkingHours = 8 * $numberOfDays;
+                $totalWorkingMinutes = 480 * $numberOfDays;
+            }
+            
+            // Calculate total minutes for each status (each count represents 5 minutes)
+            $normalMinutes = $normalCount * 5;
+            $highMinutes = $highCount * 5;
+            $lowMinutes = $lowCount * 5;
+            
+            // Avoid division by zero
+            $normalPercentage = $totalWorkingMinutes > 0 ? ($normalMinutes / $totalWorkingMinutes) * 100 : 0;
+            $highPercentage = $totalWorkingMinutes > 0 ? ($highMinutes / $totalWorkingMinutes) * 100 : 0;
+            $lowPercentage = $totalWorkingMinutes > 0 ? ($lowMinutes / $totalWorkingMinutes) * 100 : 0;
+            
+            // Format time as HH:MM:SS
+            $normalTime = sprintf('%02d:%02d:%02d', floor($normalMinutes / 60), $normalMinutes % 60, 0);
+            $highTime = sprintf('%02d:%02d:%02d', floor($highMinutes / 60), $highMinutes % 60, 0);
+            $lowTime = sprintf('%02d:%02d:%02d', floor($lowMinutes / 60), $lowMinutes % 60, 0);
+            
+            return [
+                'normal_count' => $normalCount,
+                'normal_minutes' => $normalMinutes,
+                'normal_time' => $normalTime,
+                'normal_percentage' => round($normalPercentage, 2),
+                
+                'high_count' => $highCount,
+                'high_minutes' => $highMinutes,
+                'high_time' => $highTime,
+                'high_percentage' => round($highPercentage, 2),
+                
+                'low_count' => $lowCount,
+                'low_minutes' => $lowMinutes,
+                'low_time' => $lowTime,
+                'low_percentage' => round($lowPercentage, 2),
+                
+                'total_working_hours' => $totalWorkingHours,
+                'total_working_minutes' => $totalWorkingMinutes,
+                'number_of_days' => $numberOfDays,
+            ];
+        } catch (\Exception $e) {
+            return $this->getEmptyStatusStats();
         }
-        // convert to percentage base working hours (7 AM - 7 PM = 12 hours)
-        $workingHours = ['start' => 7, 'end' => 19];
-        $totalWorkingHours = $workingHours['end'] - $workingHours['start'];
-        $totalWorkingMinutes = $totalWorkingHours * 60; // Convert to minutes
-        
-        // Calculate total minutes for each status (each count represents 5 minutes)
-        $normalMinutes = $normalCount * 5;
-        $highMinutes = $highCount * 5;
-        $lowMinutes = $lowCount * 5;
-        
-        // Calculate percentages based on working hours
-        $normalPercentage = ($normalMinutes / $totalWorkingMinutes) * 100;
-        $highPercentage = ($highMinutes / $totalWorkingMinutes) * 100;
-        $lowPercentage = ($lowMinutes / $totalWorkingMinutes) * 100;
-        
-        // Format time as HH:MM:SS
-        $normalTime = sprintf('%02d:%02d:%02d', floor($normalMinutes / 60), $normalMinutes % 60, 0);
-        $highTime = sprintf('%02d:%02d:%02d', floor($highMinutes / 60), $highMinutes % 60, 0);
-        $lowTime = sprintf('%02d:%02d:%02d', floor($lowMinutes / 60), $lowMinutes % 60, 0);
-        
+    }
+    
+    private function getEmptyStatusStats(): array
+    {
         return [
-            'normal_count' => $normalCount,
-            'normal_minutes' => $normalMinutes,
-            'normal_time' => $normalTime,
-            'normal_percentage' => round($normalPercentage, 2),
+            'normal_count' => 0,
+            'normal_minutes' => 0,
+            'normal_time' => '00:00:00',
+            'normal_percentage' => 0,
             
-            'high_count' => $highCount,
-            'high_minutes' => $highMinutes,
-            'high_time' => $highTime,
-            'high_percentage' => round($highPercentage, 2),
+            'high_count' => 0,
+            'high_minutes' => 0,
+            'high_time' => '00:00:00',
+            'high_percentage' => 0,
             
-            'low_count' => $lowCount,
-            'low_minutes' => $lowMinutes,
-            'low_time' => $lowTime,
-            'low_percentage' => round($lowPercentage, 2),
+            'low_count' => 0,
+            'low_minutes' => 0,
+            'low_time' => '00:00:00',
+            'low_percentage' => 0,
             
-            'total_working_hours' => $totalWorkingHours,
-            'total_working_minutes' => $totalWorkingMinutes,
+            'total_working_hours' => 8,
+            'number_of_days' => 1,
+            'total_working_minutes' => 480,
         ];
     }
     
@@ -213,10 +364,11 @@ new class extends Component {
 
     private function prepareStatusChartData(): array
     {
+        $stats = $this->statsByStatus();
         return [
             'labels' => ['Normal pH', 'High pH', 'Low pH'],
             'datasets' => [[
-                'data' => [$this->statsByStatus['normal_percentage'] ?? 0, $this->statsByStatus['high_percentage'] ?? 0, $this->statsByStatus['low_percentage'] ?? 0],
+                'data' => [$stats['normal_percentage'] ?? 0, $stats['high_percentage'] ?? 0, $stats['low_percentage'] ?? 0],
                 'backgroundColor' => [
                     'rgba(34, 197, 94, 0.8)',   // green for Normal pH
                     'rgba(239, 68, 68, 0.8)',    // red for High pH
@@ -232,38 +384,101 @@ new class extends Component {
         ];
     }
 
+    // get working hour in the day
+    public function getWorkingHourInTheDay(?Carbon $date = null, ?Project $project = null)
+    {
+        // Use current date if not provided
+        $date = $date ?? Carbon::parse($this->start_at);
+        
+        // Get project if not provided
+        if (!$project) {
+            $device = $this->getActiveDevice();
+            if (!$device) {
+                return '0 seconds';
+            }
+            $project = Project::where('ip', $device->ip_address)->first();
+            if (!$project) {
+                return '0 seconds';
+            }
+        }
+        
+        // Use WorkingHoursService to get working hours
+        $workingHoursService = app(WorkingHoursService::class);
+        $workingHours = $workingHoursService->getProjectWorkingHours($project->id);
+        
+        // Get the first working hour configuration or use default from config
+        if (!empty($workingHours)) {
+            $firstShift = $workingHours[0];
+            $startTime = Carbon::parse($firstShift['start_time']);
+            $endTime = Carbon::parse($firstShift['end_time']);
+            $start = $date->copy()->setTime($startTime->hour, $startTime->minute);
+            $end = $date->copy()->setTime($endTime->hour, $endTime->minute);
+        } else {
+            // Fallback to config if no working hours configured
+            $configHours = config('bpm.working_hours', ['start' => 7, 'end' => 19]);
+            $start = $date->copy()->setTime($configHours['start'], 0);
+            $end = $date->copy()->setTime($configHours['end'], 0);
+        }
+        
+        $calculator = app(UptimeCalculatorService::class);
+        $stats = $calculator->calculateStats($project->name, $start, $end);
+        
+        $formatter = app(DurationFormatterService::class);
+        return $formatter->format($stats['online_duration']);
+    }
+
     public function getOneHourAgoPh(GetDataViaModbus $service)
     {
-        $this->ip_address = InsPhDosingDevice::where("id", $this->plant)->first()->ip_address;
-        $data = $service->getDataReadInputRegisters($this->ip_address, 503, 1, 10, '1_hours_ago_ph');
-        if (!$data) {
+        try {
+            $device = InsPhDosingDevice::where("id", $this->plant)->first();
+            if (!$device || !$device->ip_address) {
+                return "-";
+            }
+            $this->ip_address = $device->ip_address;
+            $data = $service->getDataReadInputRegisters($this->ip_address, 503, 1, 10, '1_hours_ago_ph');
+            if (!$data || $data == 0) {
+                return "-";
+            }
+            return (float) $data / 100;
+        } catch (\Exception $e) {
             return "-";
         }
-        return (float) $data / 100;
     }
 
     public function getCurrentPh(GetDataViaModbus $service)
     {
-        $this->ip_address = InsPhDosingDevice::where("id", $this->plant)->first()->ip_address;
-        $data = $service->getDataReadInputRegisters($this->ip_address, 503, 1, 0, 'current_ph');
-        if (!$data) {
+        try {
+            $device = InsPhDosingDevice::where("id", $this->plant)->first();
+            if (!$device || !$device->ip_address) {
+                return "-";
+            }
+            $this->ip_address = $device->ip_address;
+            $data = $service->getDataReadInputRegisters($this->ip_address, 503, 1, 0, 'current_ph');
+            if (!$data || $data == 0) {
+                return "-";
+            }
+            return (float) $data / 100;
+        } catch (\Exception $e) {
             return "-";
         }
-        return (float) $data / 100;
     }
     
     function getUniquePlants()
     {
-        return InsPhDosingDevice::orderBy("plant")
-            ->get()
-            ->pluck("plant", "id")
-            ->toArray();
+        try {
+            return InsPhDosingDevice::orderBy("plant")
+                ->get()
+                ->pluck("plant", "id")
+                ->toArray();
+        } catch (\Exception $e) {
+            return [];
+        }
     }
 
     public function getCountsQuery()
     {
         $query = InsPhDosingCount::with('device')
-            ->whereBetween("created_at", [$this->start_at, $this->end_at]);
+            ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
 
         if ($this->plant) {
             $query->whereHas('device', function($q) {
@@ -276,95 +491,200 @@ new class extends Component {
 
     public function getChartData()
     {
-        $data = InsPhDosingCount::with('device')
-            ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
+        try {
+            $data = InsPhDosingCount::with('device')
+                ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
 
-        if ($this->plant) {
-            $data->whereHas('device', function($q) {
-                $q->where('id', $this->plant);
-            });
-        }
-
-        $data = $data->orderBy("created_at", "ASC")->get();
-
-        // Group data by hourly intervals
-        $hourlyData = [];
-        
-        foreach ($data as $count) {
-            $timestamp = Carbon::parse($count->created_at);
-            
-            // Create hourly key (format: Y-m-d H:00:00)
-            $hourKey = $timestamp->format('Y-m-d H:00:00');
-            
-            // Extract ph value from the ph_value array/json
-            // Handle both seeder format ('current') and polling format ('current_ph')
-            if (is_array($count->ph_value)) {
-                $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? 0;
-            } else {
-                $phValue = 0;
+            if ($this->plant) {
+                $data->whereHas('device', function($q) {
+                    $q->where('id', $this->plant);
+                });
             }
-            
-            // Initialize hour group if not exists
-            if (!isset($hourlyData[$hourKey])) {
-                $hourlyData[$hourKey] = [
-                    'sum' => 0,
-                    'count' => 0,
-                    'timestamp' => $timestamp->startOfHour()
-                ];
-            }
-            
-            // Accumulate pH values
-            $hourlyData[$hourKey]['sum'] += (float) $phValue;
-            $hourlyData[$hourKey]['count']++;
-        }
 
-        // Calculate averages and prepare chart data
-        $chartData = [
+            $data = $data->orderBy("created_at", "ASC")->get();
+
+            // Fetch dosing log data
+            $dosingLogs = \App\Models\InsPhDosingLog::with('device')
+                ->whereBetween("created_at", [Carbon::parse($this->start_at)->startOfDay(), Carbon::parse($this->end_at)->endOfDay()]);
+
+            if ($this->plant) {
+                $dosingLogs->whereHas('device', function($q) {
+                    $q->where('id', $this->plant);
+                });
+            }
+
+            $dosingLogs = $dosingLogs->orderBy("created_at", "ASC")->get();
+
+            // Return empty chart data if no data exists
+            if ($data->isEmpty()) {
+                return $this->getEmptyChartData();
+            }
+
+            // Group data by hourly intervals
+            $hourlyData = [];
+            
+            foreach ($data as $count) {
+                $timestamp = Carbon::parse($count->created_at);
+                
+                // Create hourly key (format: Y-m-d H:00:00)
+                $hourKey = $timestamp->format('Y-m-d H:00:00');
+                
+                // Extract ph value from the ph_value array/json
+                // Handle both seeder format ('current') and polling format ('current_ph')
+                if (is_array($count->ph_value)) {
+                    $phValue = $count->ph_value['current_ph'] ?? $count->ph_value['current'] ?? null;
+                } else {
+                    $phValue = null;
+                }
+                
+                // Skip invalid pH values
+                if ($phValue === null || !is_numeric($phValue)) {
+                    continue;
+                }
+                
+                // Initialize hour group if not exists
+                if (!isset($hourlyData[$hourKey])) {
+                    $hourlyData[$hourKey] = [
+                        'sum' => 0,
+                        'count' => 0,
+                        'timestamp' => $timestamp->startOfHour(),
+                        'has_dosing' => false
+                    ];
+                }
+                
+                // Accumulate pH values
+                $hourlyData[$hourKey]['sum'] += (float) $phValue;
+                $hourlyData[$hourKey]['count']++;
+            }
+
+            // Process dosing events and mark intervals
+            foreach ($dosingLogs as $log) {
+                $timestamp = Carbon::parse($log->created_at);
+                
+                // Create hourly key
+                $hourKey = $timestamp->format('Y-m-d H:00:00');
+                
+                // Mark this interval as having dosing event
+                if (isset($hourlyData[$hourKey])) {
+                    $hourlyData[$hourKey]['has_dosing'] = true;
+                }
+            }
+
+            // Return empty chart if no valid data after processing
+            if (empty($hourlyData)) {
+                return $this->getEmptyChartData();
+            }
+
+            // Calculate averages and prepare chart data
+            $chartData = [
+                'labels' => [],
+                'phValues' => [],
+                'dosingMarkers' => [],
+            ];
+
+            // Determine if we need to show dates in labels (multi-day range)
+            $startDate = Carbon::parse($this->start_at);
+            $endDate = Carbon::parse($this->end_at);
+            $showDate = $startDate->diffInDays($endDate) > 0;
+
+            // Sort by hour key and build final arrays
+            ksort($hourlyData);
+            
+            foreach ($hourlyData as $hourKey => $hourInfo) {
+                $avgPh = $hourInfo['count'] > 0 ? $hourInfo['sum'] / $hourInfo['count'] : 0;
+                
+                // Format label based on date range
+                if ($showDate) {
+                    $chartData['labels'][] = $hourInfo['timestamp']->format('d/m H:00');
+                } else {
+                    $chartData['labels'][] = $hourInfo['timestamp']->format('H:00');
+                }
+                
+                $chartData['phValues'][] = round($avgPh, 2);
+                
+                // Add dosing marker if this interval has dosing event
+                if ($hourInfo['has_dosing']) {
+                    $chartData['dosingMarkers'][] = round($avgPh, 2);
+                } else {
+                    $chartData['dosingMarkers'][] = null;
+                }
+            }
+
+            return $chartData;
+        } catch (\Exception $e) {
+            return $this->getEmptyChartData();
+        }
+    }
+    
+    private function getEmptyChartData(): array
+    {
+        return [
             'labels' => [],
             'phValues' => [],
+            'dosingMarkers' => [],
         ];
-
-        // Determine if we need to show dates in labels (multi-day range)
-        $startDate = Carbon::parse($this->start_at);
-        $endDate = Carbon::parse($this->end_at);
-        $showDate = $startDate->diffInDays($endDate) > 0;
-
-        // Sort by hour key and build final arrays
-        ksort($hourlyData);
-        
-        foreach ($hourlyData as $hourKey => $hourInfo) {
-            $avgPh = $hourInfo['count'] > 0 ? $hourInfo['sum'] / $hourInfo['count'] : 0;
-            
-            // Format label based on date range
-            if ($showDate) {
-                $chartData['labels'][] = $hourInfo['timestamp']->format('d/m H:00');
-            } else {
-                $chartData['labels'][] = $hourInfo['timestamp']->format('H:00');
-            }
-            
-            $chartData['phValues'][] = round($avgPh, 2);
-        }
-
-        return $chartData;
     }
 
     public function getTPMCodeMachine()
     {
-        $dataJson = InsPhDosingDevice::where("id", $this->plant)->first()->config;
-        return $dataJson['tpm_code'] ?? "N/A";
+        try {
+            $device = InsPhDosingDevice::where("id", $this->plant)->first();
+            if (!$device || !$device->config) {
+                return "-";
+            }
+            $dataJson = $device->config;
+        } catch (\Exception $e) {
+           return "-";
+        }
+        return $dataJson['tpm_code'] ?? "-";
+    }
+
+    public function getStdMinPh()
+    {
+        try {
+            $device = InsPhDosingDevice::where("id", $this->plant)->first();
+            if (!$device || !$device->config) {
+                return 2;
+            }
+            $dataJson = $device->config;
+        } catch (\Exception $e) {
+            return 2;
+        }
+        return $dataJson['standard_ph']['min'] ?? 2;
+    }
+
+    public function getStdMaxPh()
+    {
+        try {
+            $device = InsPhDosingDevice::where("id", $this->plant)->first();
+            if (!$device || !$device->config) {
+                return 3;
+            }
+            $dataJson = $device->config;
+        } catch (\Exception $e) {
+            return 3;
+        }
+        return $dataJson['standard_ph']['max'] ?? 3;
     }
 
     public function with(): array
     {
-        return [
-            'counts' => $this->getCountsQuery()->paginate($this->perPage),
-            'chartData' => $this->getChartData(),
-        ];
+        try {
+            return [
+                'counts' => $this->getCountsQuery()->paginate($this->perPage),
+                'chartData' => $this->getChartData(),
+            ];
+        } catch (\Exception $e) {
+            return [
+                'counts' => collect(),
+                'chartData' => $this->getEmptyChartData(),
+            ];
+        }
     }
 
 }; ?>
 
-<div>
+<div wire:poll.20s="refreshCharts">
     <div class="p-0 sm:p-1 mb-6">
         <div class="flex flex-col lg:flex-row gap-3 w-full bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-4">
             <div>
@@ -412,7 +732,6 @@ new class extends Component {
                 <div>
                     <label class="block px-3 mb-2 uppercase text-xs text-neutral-500">{{ __("Plant") }}</label>
                     <x-select wire:model.live="plant" class="w-full">
-                        <option value="">{{ __("Semua") }}</option>
                         @foreach($this->getUniquePlants() as $id => $plantOption)
                             <option value="{{$id}}">{{$plantOption}}</option>
                         @endforeach
@@ -423,7 +742,7 @@ new class extends Component {
         </div>
 
         <!-- Second Row: TPM Code and Latest Calibration -->
-        <div class="grid grid-cols-1 lg:grid-cols-4 gap-2 mt-3">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-2 mt-3" wire:key="stats-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
             <!-- TPM Code Machine -->
             <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-2 text-center">
                 <p class="text-lg font-semibold text-neutral-600 dark:text-neutral-400 mb-3">{{ __("TPM Code Machine") }}</p>
@@ -451,7 +770,7 @@ new class extends Component {
         <!-- Top Row: Three Cards -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-2">
             <!-- Online System Monitoring -->
-            <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6" wire:key="online-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
                 <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Online System Monitoring") }}</h3>
                 <div class="grid grid-cols-2 gap-2">
                     <div class="col-span-1 h-[150px] items-center justify-center">
@@ -461,7 +780,7 @@ new class extends Component {
                     </div>
                     
                     <!-- Legend -->
-                    <div class="col-span-1 flex flex-col gap-y-1 text-left">
+                    <div class="col-span-1 flex flex-col gap-y-1 text-left" wire:key="online-legend-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
                         <div class="flex items-center gap-2">
                             <div class="w-3 h-3 rounded-full bg-green-500"></div>
                             <span class="text-sm text-gray-700 dark:text-gray-300">{{ __("Online") }}</span>
@@ -487,7 +806,7 @@ new class extends Component {
             </div>
 
             <!-- Total Duration per Status -->
-            <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6" wire:key="status-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
                 <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Total Duration per Status") }}</h3>
                 <div class="grid grid-cols-2 gap-2">
                     <div class="h-[150px] items-center justify-center">
@@ -497,40 +816,45 @@ new class extends Component {
                     </div>
                     
                     <!-- Legend -->
-                    <div class="flex flex-col gap-y-1 text-left">
+                    @php
+                        $statusStats = $this->statsByStatus();
+                    @endphp
+                    <div class="flex flex-col gap-y-1 text-left" wire:key="status-legend-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
                         <div class="flex items-center gap-2">
                             <div class="w-3 h-3 rounded-full bg-green-500"></div>
                             <span class="text-sm text-gray-700 dark:text-gray-300">{{ __("Normal pH") }}</span>
-                            <span class="ml-auto text-sm font-semibold text-green-600 dark:text-green-400">{{ $statsByStatus['normal_percentage'] ?? 0 }}%</span>
+                            <span class="ml-auto text-sm font-semibold text-green-600 dark:text-green-400">{{ $statusStats['normal_percentage'] ?? 0 }}%</span>
                         </div>
-                        <div class="text-sm text-gray-500 ml-5">{{ $statsByStatus['normal_time'] ?? '00:00:00' }}</div>
+                        <div class="text-sm text-gray-500 ml-5">{{ $statusStats['normal_time'] ?? '00:00:00' }}</div>
                         
                         <div class="flex items-center gap-2">
                             <div class="w-3 h-3 rounded-full bg-red-500"></div>
                             <span class="text-sm text-gray-700 dark:text-gray-300">{{ __("High pH") }}</span>
-                            <span class="ml-auto text-sm font-semibold text-red-600 dark:text-red-400">{{ $statsByStatus['high_percentage'] ?? 0 }}%</span>
+                            <span class="ml-auto text-sm font-semibold text-red-600 dark:text-red-400">{{ $statusStats['high_percentage'] ?? 0 }}%</span>
                         </div>
-                        <div class="text-sm text-gray-500 ml-5">{{ $statsByStatus['high_time'] ?? '00:00:00' }}</div>
+                        <div class="text-sm text-gray-500 ml-5">{{ $statusStats['high_time'] ?? '00:00:00' }}</div>
                         
                         <div class="flex items-center gap-2">
                             <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
                             <span class="text-sm text-gray-700 dark:text-gray-300">{{ __("Low pH") }}</span>
-                            <span class="ml-auto text-sm font-semibold text-yellow-600 dark:text-yellow-400">{{ $statsByStatus['low_percentage'] ?? 0 }}%</span>
+                            <span class="ml-auto text-sm font-semibold text-yellow-600 dark:text-yellow-400">{{ $statusStats['low_percentage'] ?? 0 }}%</span>
                         </div>
-                        <div class="text-sm text-gray-500 ml-5">{{ $statsByStatus['low_time'] ?? '00:00:00' }}</div>
+                        <div class="text-sm text-gray-500 ml-5">{{ $statusStats['low_time'] ?? '00:00:00' }}</div>
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- Chart Area -->
-        <div class="mt-3">
+        <div class="mt-3" wire:key="chart-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
             <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
                 <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Daily Trend Chart pH") ." (1 Hour Interval)" }}</h3>
                     <div 
                         x-data="{ 
                             chartData: @js($chartData),
                             chart: null,
+                            stdMaxPh: {{ $stdMaxPh }},
+                            stdMinPh: {{ $stdMinPh }},
                             initChart() {
                                 if (typeof ApexCharts === 'undefined') {
                                     setTimeout(() => this.initChart(), 100);
@@ -544,12 +868,13 @@ new class extends Component {
                                 
                                 if (this.chart) {
                                     this.chart.destroy();
+                                    this.chart = null;
                                 }
                                 
                                 const phSeries = data.phValues || [];
                                 const labels = data.labels || [];
-                                const maxLimit = Array(labels.length).fill(3);
-                                const minLimit = Array(labels.length).fill(2);
+                                const maxLimit = Array(labels.length).fill(this.stdMaxPh);
+                                const minLimit = Array(labels.length).fill(this.stdMinPh);
                                 
                                 const isDark = document.documentElement.classList.contains('dark');
                                 const textColor = isDark ? '#d4d4d4' : '#525252';
@@ -558,8 +883,8 @@ new class extends Component {
                                 const options = {
                                     series: [
                                         { name: 'Nilai pH', data: phSeries, type: 'line' },
-                                        { name: 'Batas Maksimal (pH 3)', data: maxLimit, type: 'line' },
-                                        { name: 'Batas Minimal (pH 2)', data: minLimit, type: 'line' }
+                                        { name: 'Batas Maksimal (pH ' + this.stdMaxPh + ')', data: maxLimit, type: 'line' },
+                                        { name: 'Batas Minimal (pH ' + this.stdMinPh + ')', data: minLimit, type: 'line' }
                                     ],
                                     chart: {
                                         height: 400,
@@ -578,7 +903,7 @@ new class extends Component {
                                         colors: ['#3b82f6', '#ef4444', '#ef4444'],
                                         strokeColors: '#fff',
                                         strokeWidth: 2,
-                                        hover: { size: 7 }
+                                        hover: { size: [7, 0, 0] }
                                     },
                                     xaxis: {
                                         categories: labels,
@@ -657,118 +982,127 @@ new class extends Component {
 </div>
 
 @script
-<script>
-    let onlineChart;
-    let statusChart;
+    <script>
+        let onlineChart;
+        let statusChart;
 
-    function initOnlineChart(onlineData) {
-        const onlineCtx = document.getElementById('onlineChart');
-        
-        if (onlineCtx) {
-            const existingOnlineChart = Chart.getChart(onlineCtx);
-            if (existingOnlineChart) {
-                existingOnlineChart.destroy();
-            }
+        function initOnlineChart(onlineData) {
+            const onlineCtx = document.getElementById('onlineChart');
             
-            onlineChart = new Chart(onlineCtx, {
-                type: 'doughnut',
-                data: onlineData,
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: {
-                        legend: { 
-                            display: false
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.label + ': ' + context.parsed + '%';
+            if (onlineCtx) {
+                const existingOnlineChart = Chart.getChart(onlineCtx);
+                if (existingOnlineChart) {
+                    existingOnlineChart.destroy();
+                }
+                
+                onlineChart = new Chart(onlineCtx, {
+                    type: 'doughnut',
+                    data: onlineData,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { 
+                                display: false
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return context.label + ': ' + context.parsed + '%';
+                                    }
                                 }
+                            },
+                            datalabels: {
+                                display: false
                             }
-                        },
-                        datalabels: {
-                            display: false
                         }
                     }
-                }
-            });
-        }
-    }
-
-    function initStatusChart(statusData) {
-        const statusCtx = document.getElementById('statusChart');
-        
-        if (statusCtx) {
-            const existingStatusChart = Chart.getChart(statusCtx);
-            if (existingStatusChart) {
-                existingStatusChart.destroy();
+                });
             }
+        }
+
+        function initStatusChart(statusData) {
+            const statusCtx = document.getElementById('statusChart');
             
-            statusChart = new Chart(statusCtx, {
-                type: 'doughnut',
-                data: statusData,
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: {
-                        legend: { 
-                            display: false
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.label + ': ' + context.parsed + '%';
+            if (statusCtx) {
+                const existingStatusChart = Chart.getChart(statusCtx);
+                if (existingStatusChart) {
+                    existingStatusChart.destroy();
+                }
+                
+                statusChart = new Chart(statusCtx, {
+                    type: 'doughnut',
+                    data: statusData,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { 
+                                display: false
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return context.label + ': ' + context.parsed + '%';
+                                    }
                                 }
+                            },
+                            datalabels: {
+                                display: false
                             }
-                        },
-                        datalabels: {
-                            display: false
                         }
                     }
-                }
-            });
+                });
+            }
         }
-    }
 
-    // Listen for refresh event
-    Livewire.on('refresh-online-chart', (event) => {
-        const data = event[0] || event;
-        initOnlineChart(data.onlineData);
-    });
+        // Listen for refresh events
+        Livewire.on('chart-data-updated', (event) => {
+            const data = event[0] || event;
+            // Relay to Alpine via window CustomEvent
+            window.dispatchEvent(new CustomEvent('chart-data-updated', {
+                detail: { chartData: data.chartData }
+            }));
+        });
 
-    Livewire.on('refresh-status-chart', (event) => {
-        const data = event[0] || event;
-        initStatusChart(data.statusData);
-    });
+        Livewire.on('refresh-online-chart', (event) => {
+            const data = event[0] || event;
+            initOnlineChart(data.onlineData);
+        });
 
-    // Initial load
-    const initializeOnlineChart = () => {
-        const onlineData = @json($this->prepareOnlineChartData());
-        
-        // Wait for DOM to be ready
-        if (document.getElementById('onlineChart')) {
-            initOnlineChart(onlineData);
-        } else {
-            // Retry after a short delay if element not found
-            setTimeout(initializeOnlineChart, 100);
-        }
-    };
+        Livewire.on('refresh-status-chart', (event) => {
+            const data = event[0] || event;
+            initStatusChart(data.statusData);
+        });
 
-    const initializeStatusChart = () => {
-        const statusData = @json($this->prepareStatusChartData());
-        
-        // Wait for DOM to be ready
-        if (document.getElementById('statusChart')) {
-            initStatusChart(statusData);
-        } else {
-            // Retry after a short delay if element not found
-            setTimeout(initializeStatusChart, 100);
-        }
-    };
+        // Initial load
+        const initializeOnlineChart = () => {
+            const onlineData = @json($this->prepareOnlineChartData());
+            
+            // Wait for DOM to be ready
+            if (document.getElementById('onlineChart')) {
+                initOnlineChart(onlineData);
+            } else {
+                // Retry after a short delay if element not found
+                setTimeout(initializeOnlineChart, 100);
+            }
+        };
 
-    // Run after Livewire component is loaded
-    initializeOnlineChart();
-    initializeStatusChart();
-</script>
-@endscript
+        const initializeStatusChart = () => {
+            const statusData = @json($this->prepareStatusChartData());
+            
+            // Wait for DOM to be ready
+            if (document.getElementById('statusChart')) {
+                initStatusChart(statusData);
+            } else {
+                // Retry after a short delay if element not found
+                setTimeout(initializeStatusChart, 100);
+            }
+        };
+
+        // Run after Livewire component is loaded
+        initializeOnlineChart();
+        initializeStatusChart();
+    </script>
+    @endscript
+</div>

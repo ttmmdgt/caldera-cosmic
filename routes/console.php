@@ -24,3 +24,4 @@ Schedule::command('app:ins-dwp-time-chart')->everyThirtyMinutes();
 
 // PH Dossing scheduled commands
 Schedule::command('app:ins-ph-dossing-poll')->everyFiveMinutes();
+Schedule::command('app:ins-ph-dossing-reset')->dailyAt('05:35');
