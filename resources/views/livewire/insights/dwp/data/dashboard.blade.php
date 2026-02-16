@@ -130,9 +130,9 @@ new class extends Component {
         }
 
         // === NEW: Calculate Online Monitoring Stats ===
-        $dataOnlineMonitoring = $this->getOnlineMonitoringStats($this->line);
+        $dataOnlineMonitoring       = $this->getOnlineMonitoringStats($this->line);
         $this->onlineMonitoringData = $dataOnlineMonitoring['percentages'];
-        $this->onlineTime = $dataOnlineMonitoring['total_hours'] ?? 0;
+        $this->onlineTime     = $dataOnlineMonitoring['total_hours'] ?? 0;
         $this->fullTimeFormat = $dataOnlineMonitoring['full_time_format'] ?? "";
         $this->offlineTime = $dataOnlineMonitoring['offline_time_format'] ?? "";
         $this->timeoutTime = $dataOnlineMonitoring['timeout_time_format'] ?? "";
