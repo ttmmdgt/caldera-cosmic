@@ -18,7 +18,7 @@ class UptimeCalculatorService
             return $this->getEmptyStats();
         }
         
-        $onlineDuration = $this->calculateOnlineDuration($logs, $end);
+        $onlineDuration  = $this->calculateOnlineDuration($logs, $end);
         $offlineDuration = $this->calculateOfflineDuration($logs, $end);
         $timeoutDuration = $this->calculateTimeoutDuration($logs, $end);
         
@@ -65,19 +65,22 @@ class UptimeCalculatorService
     
     private function calculateOfflineDuration(Collection $logs, Carbon $end): int
     {
-        return $this->calculateStatusDuration($logs, 'offline', $end);
+        // Only count offline periods >= 5 minutes (true offline)
+        return $this->calculateStatusDuration($logs, 'offline', $end, self::TIMEOUT_THRESHOLD_SECONDS, true);
     }
     
     private function calculateTimeoutDuration(Collection $logs, Carbon $end): int
     {
-        return $this->calculateStatusDuration($logs, 'offline', $end, self::TIMEOUT_THRESHOLD_SECONDS);
+        // Only count offline periods < 5 minutes (RTO)
+        return $this->calculateStatusDuration($logs, 'offline', $end, self::TIMEOUT_THRESHOLD_SECONDS, false);
     }
     
     private function calculateStatusDuration(
         Collection $logs, 
         string $status, 
         Carbon $end, 
-        ?int $maxDuration = null
+        ?int $threshold = null,
+        ?bool $countAboveThreshold = null
     ): int {
         $totalSeconds = 0;
         $count = $logs->count();
@@ -93,7 +96,14 @@ class UptimeCalculatorService
             
             $duration = $startTime->diffInSeconds($endTime);
             
-            if ($maxDuration === null || $duration < $maxDuration) {
+            // Determine if we should count this duration based on threshold
+            if ($threshold === null) {
+                $totalSeconds += $duration;
+            } elseif ($countAboveThreshold === true && $duration >= $threshold) {
+                // Count only durations >= threshold (true offline)
+                $totalSeconds += $duration;
+            } elseif ($countAboveThreshold === false && $duration < $threshold) {
+                // Count only durations < threshold (RTO)
                 $totalSeconds += $duration;
             }
             

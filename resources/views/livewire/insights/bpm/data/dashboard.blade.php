@@ -4,8 +4,11 @@ use Livewire\Volt\Component;
 use Livewire\Attributes\Url;
 use App\Models\InsBpmDevice;
 use App\Services\BpmEmergencyService;
+use App\Services\BpmPowerService;
 use App\Services\UptimeCalculatorService;
 use App\Services\DurationFormatterService;
+use App\Services\WorkingHoursService;
+use App\Models\Project;
 use Carbon\Carbon;
 
 new class extends Component {
@@ -17,7 +20,7 @@ new class extends Component {
     public $lastUpdated;
     public $emergencyByMachine = [];
     public $onlineStats = [];
-    
+    public $powerByMachine = [];
     public function mount(): void
     {
         $this->dispatch('update-menu', $this->view);
@@ -43,9 +46,10 @@ new class extends Component {
     public function loadData(): void
     {
         $date = Carbon::parse($this->start_at);
-        
+        $device = $this->getActiveDevice();
         $this->emergencyByMachine = $this->loadEmergencyData($date);
         $this->onlineStats = $this->loadOnlineStats($date);
+        $this->powerByMachine = $this->loadPowerData($device, $date);
         $this->lastUpdated = now()->format('n/j/Y, H:i.s');
     }
     
@@ -54,7 +58,12 @@ new class extends Component {
         $service = app(BpmEmergencyService::class);
         return $service->getEmergencyDataByMachine($this->plant, $this->line, $date);
     }
-    
+
+    private function loadPowerData(InsBpmDevice $device, Carbon $date): array
+    {
+        $service = app(BpmPowerService::class);
+        return $service->getPowerDataByMachine($device, $date);
+    }
     private function loadOnlineStats(Carbon $date): array
     {
         $device = $this->getActiveDevice();
@@ -63,15 +72,24 @@ new class extends Component {
             return $this->getEmptyOnlineStats();
         }
         
-        $projectName = $this->getProjectNameByIp($device->ip_address);
-        
+        // $projectName = $this->getProjectNameByIp($device->ip_address);
+        $project = Project::where('ip', $device->ip_address)->first()->toArray();
+        $projectName = $project['name'];
         if (!$projectName) {
             return $this->getEmptyOnlineStats();
         }
         
-        $workingHours = config('bpm.working_hours');
-        $start = $date->copy()->setTime($workingHours['start'], 0);
-        $end = $date->copy()->setTime($workingHours['end'], 0);
+        $workingHoursService = app(WorkingHoursService::class);
+        $workingHours = $workingHoursService->getProjectWorkingHours($project['id']);
+
+        if(!empty($workingHours)) {
+            $start = $date->copy()->setTime(Carbon::parse($workingHours[0]['start_time'])->hour, Carbon::parse($workingHours[0]['start_time'])->minute);
+            $end   = $date->copy()->setTime(Carbon::parse($workingHours[0]['end_time'])->hour, Carbon::parse($workingHours[0]['end_time'])->minute);
+        } else {
+            $workingHours = config('bpm.working_hours');
+            $start        = $date->copy()->setTime($workingHours['start'], 0);
+            $end          = $date->copy()->setTime($workingHours['end'], 0);
+        }
         
         $calculator = app(UptimeCalculatorService::class);
         $stats = $calculator->calculateStats($projectName, $start, $end);
@@ -79,10 +97,10 @@ new class extends Component {
         $formatter = app(DurationFormatterService::class);
         
         return [
-            'online_percentage' => $stats['online_percentage'],
+            'online_percentage'  => $stats['online_percentage'],
             'offline_percentage' => $stats['offline_percentage'],
             'timeout_percentage' => $stats['timeout_percentage'],
-            'online_time' => $formatter->format($stats['online_duration']),
+            'online_time'  => $formatter->format($stats['online_duration']),
             'offline_time' => $formatter->format($stats['offline_duration']),
             'timeout_time' => $formatter->format($stats['timeout_duration']),
         ];
@@ -120,7 +138,7 @@ new class extends Component {
         ];
     }
     
-    private function loadAndRefresh(): void
+    public function loadAndRefresh(): void
     {
         $this->loadData();
         $this->refreshCharts();
@@ -189,7 +207,7 @@ new class extends Component {
     }
 }; ?>
 
-<div>
+<div wire:poll.10s="loadAndRefresh">
     {{-- Header with Filters --}}
     <div class="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
         <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-end flex-1">
@@ -224,14 +242,26 @@ new class extends Component {
             </div>
         </div>
         <div class="text-sm">
-            <div class="text-red-500 font-medium">{{ __('Data counter update every 5 min') }}</div>
             <div class="text-gray-600 dark:text-gray-400 mt-1">
                 <span class="text-xs">{{ __('Last Updated') }}</span><br>
                 <span class="font-semibold">{{ $lastUpdated }}</span>
             </div>
         </div>
     </div>
-
+    <h1 class="text-lg font-semibold mb-1 text-gray-800 dark:text-gray-200">Counter ON/OFF Machine</h1>
+    <div class="grid grid-cols-4 gap-4 mb-6">
+        @php
+            $machineData = collect($powerByMachine)->keyBy('machine');
+        @endphp
+        @foreach([1, 2, 3, 4] as $machineNumber)
+        <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
+            <h1 class="text-lg font-semibold mb-1 text-gray-800 dark:text-gray-200">Machine {{ $machineNumber }}</h1>
+            <div class="flex items-center gap-2">
+                <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-200">{{ $machineData->get($machineNumber)['power'] ?? 0 }}</h1>
+            </div>
+        </div>
+        @endforeach
+    </div>
     {{-- Main Content Grid --}}
     <div class="grid grid-cols-1 lg:grid-cols-6 gap-6 mb-6">
         {{-- Online System Monitoring (Pie Chart) --}}
@@ -357,7 +387,17 @@ new class extends Component {
                             }
                         },
                         datalabels: {
-                            display: false
+                            display: true,
+                            color: '#fff',
+                            font: {
+                                weight: 'bold',
+                                size: 14
+                            },
+                            anchor: 'center',
+                            align: 'center',
+                            formatter: function(value, context) {
+                                return value > 0 ? value : '';
+                            }
                         }
                     },
                     scales: {

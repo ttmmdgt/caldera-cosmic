@@ -37,6 +37,9 @@ class InsPhDossingLogPoll extends Command
         'setting_ph_high_max'   => 4,
         'setting_ph_middle_min' => 3,
         'setting_ph_middle_max' => 5,
+        'setting_formula_1_amount'     => 101,
+        'setting_formula_2_amount'     => 103,
+        'setting_formula_3_amount'     => 105,
         
         // Coils
         'reset'                 => 13,
@@ -151,7 +154,19 @@ class InsPhDossingLogPoll extends Command
             // Read Input Register (04) - Get current dosing_amount from HMI
             $dosing_amount = $this->readInputFunction($device, $this->addressWrite['amount'], 'dosing_amount');
             $dosing_amount = (int) $dosing_amount;
-            
+
+            // get formula dossing_amount from HMI
+            $formula_1_amount = $this->readInputFunction($device, $this->addressWrite['setting_formula_1_amount'], 'setting_formula_1_amount');
+            $formula_2_amount = $this->readInputFunction($device, $this->addressWrite['setting_formula_2_amount'], 'setting_formula_2_amount');
+            $formula_3_amount = $this->readInputFunction($device, $this->addressWrite['setting_formula_3_amount'], 'setting_formula_3_amount');
+
+            $data_dosing = [
+                'formula_1_amount' => (int) $formula_1_amount,
+                'formula_2_amount' => (int) $formula_2_amount,
+                'formula_3_amount' => (int) $formula_3_amount,
+                'total_amount' => $formula_1_amount + $formula_2_amount + $formula_3_amount,
+            ];
+
             // Get the last dosing_amount from database for this device
             $lastLog = InsPhDosingLog::where('device_id', $device->id)
                 ->orderBy('created_at', 'desc')
@@ -164,6 +179,7 @@ class InsPhDossingLogPoll extends Command
                 $ph_dosing_log = new InsPhDosingLog();
                 $ph_dosing_log->device_id  = $device->id;
                 $ph_dosing_log->dosing_amount = $dosing_amount;
+                $ph_dosing_log->data_dosing = $data_dosing;
                 $ph_dosing_log->save();
                 $readingsCount++;
                 

@@ -13,6 +13,12 @@ class InsPhDosingLog extends Model
     protected $fillable = [
         'device_id',
         'dosing_amount',
+        'data_dosing',
+    ];
+
+    protected $casts = [
+        'dosing_amount' => 'integer',
+        'data_dosing' => 'json',
     ];
 
     public function device(): BelongsTo

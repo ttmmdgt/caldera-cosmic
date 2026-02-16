@@ -7,6 +7,8 @@ use App\Models\InsDwpDevice;
 use App\Models\InsDwpCount;
 use App\Models\UptimeLog;
 use App\Models\InsDwpTimeAlarmCount;
+use App\Services\WorkingHoursService;
+use App\Models\Project;
 use Livewire\WithPagination;
 use Livewire\Attributes\Url;
 use App\Helpers\GlobalHelpers;
@@ -43,6 +45,7 @@ new class extends Component {
     public int $timeConstraintAlarm = 0;
     public int $longestQueueTime = 0;
     public int $alarmsActive = 0;
+    public $ipAddress = "";
 
     public array $onlineMonitoringData = [];
 
@@ -64,7 +67,15 @@ new class extends Component {
 
     private function getDataLine($line=null)
     {
+        $this->ipAddress = InsDwpDevice::whereJsonContains('config', [['line' => strtoupper($line)]])
+            ->select('ip_address')
+            ->first();
         $lines = [];
+        if($this->ipAddress){
+            $lines = InsDwpDevice::where('ip_address', $this->ipAddress)
+                ->select('config')
+                ->first()->config;
+        }
         $dataRaws = InsDwpDevice::orderBy("name")
             ->select("name", "id", "config")
             ->get()->toArray();
@@ -93,10 +104,11 @@ new class extends Component {
 
         // Query for the specific device that handles this line to avoid loading all of them.
         $device = InsDwpDevice::whereJsonContains('config', [['line' => strtoupper($selectedLine)]])
-            ->select('config')
+            ->select('config', 'ip_address')
             ->first();
 
         if ($device) {
+            $this->ipAddress = $device->ip_address;
             foreach ($device->config as $lineConfig) {
                 if (strtoupper($lineConfig['line']) === strtoupper($selectedLine)) {
                     return $lineConfig['list_mechine'] ?? [];
@@ -311,7 +323,7 @@ new class extends Component {
     public function getPressureReadingStats()
     {
         $machineConfigs = $this->getDataMachines($this->line);
-        $machineNames = array_column($machineConfigs, 'name');
+        $machineNames   = array_column($machineConfigs, 'name');
 
         if (empty($machineNames)) {
             return [
@@ -456,7 +468,18 @@ new class extends Component {
             });
 
         // 4. Define working hours:  6 AM to 4 PM (6:00 to 16:00 inclusive = 11 hours)
-        $workingHours = range(6, 17); // 6 to 17 to include 16:00-17:00 hour
+        
+        $project = Project::where('ip', $this->ipAddress)->first();
+        $workingHoursService = app(WorkingHoursService::class);
+        $workingHours = $workingHoursService->getProjectWorkingHours($project->id);
+        if(!empty($workingHours)) {
+            $start = $date->copy()->setTime(Carbon::parse($workingHours[0]['start_time'])->hour, Carbon::parse($workingHours[0]['start_time'])->minute);
+            $end   = $date->copy()->setTime(Carbon::parse($workingHours[0]['end_time'])->hour, Carbon::parse($workingHours[0]['end_time'])->minute);
+        } else {
+            $workingHours = ['start' => 6, 'end' => 16];
+            $start = $date->copy()->setTime($workingHours['start'], 0);
+            $end   = $date->copy()->setTime($workingHours['end'], 0);
+        }
 
         $labels = [];
         $datasets = [];
@@ -474,12 +497,12 @@ new class extends Component {
         }
 
         // 6. Fill data for each working hour
-        foreach ($workingHours as $hour) {
+        foreach ($workingHours as $workingHour) {
             // Format label as "07:00", "08:00", ..., "16:00"
-            $labels[] = str_pad($hour, 2, '0', STR_PAD_LEFT) . ':00';
+            $labels[] = $workingHour['start_time'] . ':00';
 
             foreach ($lines as $line) {
-                $key = $hour . '_' . $line;
+                $key = $workingHour['start_time'] . '_' . $line;
                 $value = $results->get($key) ? (int) $results->get($key)->alarm_count : 0;
                 $datasets[$line]['data'][] = $value;
             }

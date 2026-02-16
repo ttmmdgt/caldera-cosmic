@@ -123,6 +123,12 @@ new class extends Component {
                 return $this->getEmptyStatistics();
             }
 
+            // HMI sends dosing_amount as cumulative, so total = latest record's value
+            $totalDossing = $dataLog->isNotEmpty()
+                ? (is_numeric($dataLog->last()->dosing_amount) ? (float) $dataLog->last()->dosing_amount : 0)
+                : 0;
+            $dossingCount = $dataLog->count();
+
             // Group data by 5-minute intervals
             $fiveMinuteStats = [];
             
@@ -159,7 +165,7 @@ new class extends Component {
                         'ph_count' => 0,
                         'ph_max' => 0,
                         'ph_min' => PHP_FLOAT_MAX,
-                        'dosing_amounts' => [],
+                        'latest_dosing' => 0,
                         'dosing_count' => 0,
                     ];
                 }
@@ -198,14 +204,14 @@ new class extends Component {
                         'ph_count' => 0,
                         'ph_max' => 0,
                         'ph_min' => PHP_FLOAT_MAX,
-                        'dosing_amounts' => [],
+                        'latest_dosing' => 0,
                         'dosing_count' => 0,
                     ];
                 }
                 
-                // Safely get dosing amount
+                // HMI sends cumulative dosing, keep latest (newest) value per interval
                 $dosingAmount = is_numeric($log->dosing_amount) ? (float) $log->dosing_amount : 0;
-                $fiveMinuteStats[$intervalKey]['dosing_amounts'][] = $dosingAmount;
+                $fiveMinuteStats[$intervalKey]['latest_dosing'] = $dosingAmount;
                 $fiveMinuteStats[$intervalKey]['dosing_count']++;
             }
             
@@ -216,8 +222,6 @@ new class extends Component {
             
             // Calculate statistics for each interval and overall
             $intervalStats = [];
-            $totalDossing = 0;
-            $dossingCount = 0;
             $highestPh = 0;
             $lowestPh = PHP_FLOAT_MAX;
             
@@ -229,16 +233,8 @@ new class extends Component {
                     ? $data['ph_sum'] / $data['ph_count'] 
                     : 0;
                 
-                $intervalDosing = !empty($data['dosing_amounts']) 
-                    ? array_sum($data['dosing_amounts']) 
-                    : 0;
-                
                 $maxPhInInterval = $data['ph_max'];
                 $minPhInInterval = $data['ph_min'] !== PHP_FLOAT_MAX ? $data['ph_min'] : 0;
-                
-                // Track overall statistics
-                $totalDossing += $intervalDosing;
-                $dossingCount += $data['dosing_count'];
                 
                 // Track highest and lowest AVERAGE pH (to match chart display)
                 if ($data['ph_count'] > 0) {
@@ -258,7 +254,7 @@ new class extends Component {
                     'avg_ph' => round($avgPh, 2),
                     'max_ph' => round($maxPhInInterval, 2),
                     'min_ph' => round($minPhInInterval, 2),
-                    'total_dosing' => $intervalDosing,
+                    'total_dosing' => $data['latest_dosing'],
                     'dosing_count' => $data['dosing_count'],
                 ];
             }
@@ -382,7 +378,13 @@ new class extends Component {
                         'sum' => 0,
                         'count' => 0,
                         'timestamp' => $roundedTimestamp,
-                        'has_dosing' => false
+                        'has_dosing' => false,
+                        'dosing_data' => [
+                            'total_amount' => 0,
+                            'formula_1_amount' => 0,
+                            'formula_2_amount' => 0,
+                            'formula_3_amount' => 0,
+                        ],
                     ];
                 }
                 
@@ -409,12 +411,27 @@ new class extends Component {
                         'sum' => 0,
                         'count' => 0,
                         'timestamp' => $roundedTimestamp,
-                        'has_dosing' => false
+                        'has_dosing' => false,
+                        'dosing_data' => [
+                            'total_amount' => 0,
+                            'formula_1_amount' => 0,
+                            'formula_2_amount' => 0,
+                            'formula_3_amount' => 0,
+                        ],
                     ];
                 }
                 
                 // Mark this interval as having dosing event
                 $fiveMinuteData[$intervalKey]['has_dosing'] = true;
+
+                // Accumulate dosing data from data_dosing JSON
+                $dataDosing = $log->data_dosing;
+                if (is_array($dataDosing)) {
+                    $fiveMinuteData[$intervalKey]['dosing_data']['total_amount'] += (int) ($dataDosing['total_amount'] ?? 0);
+                    $fiveMinuteData[$intervalKey]['dosing_data']['formula_1_amount'] += (int) ($dataDosing['formula_1_amount'] ?? 0);
+                    $fiveMinuteData[$intervalKey]['dosing_data']['formula_2_amount'] += (int) ($dataDosing['formula_2_amount'] ?? 0);
+                    $fiveMinuteData[$intervalKey]['dosing_data']['formula_3_amount'] += (int) ($dataDosing['formula_3_amount'] ?? 0);
+                }
             }
 
             // Return empty chart if no valid data after processing
@@ -427,6 +444,7 @@ new class extends Component {
                 'labels' => [],
                 'phValues' => [],
                 'dosingMarkers' => [],
+                'dosingInfo' => [],
             ];
 
             // Determine if we need to show dates in labels (multi-day range)
@@ -463,8 +481,10 @@ new class extends Component {
                 // Add dosing marker if this interval has dosing event
                 if ($intervalInfo['has_dosing']) {
                     $chartData['dosingMarkers'][] = round($avgPh, 2);
+                    $chartData['dosingInfo'][] = $intervalInfo['dosing_data'] ?? null;
                 } else {
                     $chartData['dosingMarkers'][] = null;
+                    $chartData['dosingInfo'][] = null;
                 }
             }
 
@@ -480,6 +500,7 @@ new class extends Component {
             'labels' => [],
             'phValues' => [],
             'dosingMarkers' => [],
+            'dosingInfo' => [],
         ];
     }
 
@@ -590,12 +611,10 @@ new class extends Component {
                     </div>
                 </div>
             </div>
-            <div class="border-l border-neutral-300 dark:border-neutral-700 mx-2"></div>
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-2" wire:key="statistics-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
             <!-- Right Side: Statistics -->
             <!-- Top Row: Amount dossing & Dossing count -->
-                <!-- Amount dossing (gr) -->
                 <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6 text-center">
                     <p class="text-lg font-semibold text-neutral-600 dark:text-neutral-400 mb-2">{{ __("Amount dossing (gr)") }}</p>
                     <h2 class="text-4xl font-bold text-neutral-900 dark:text-neutral-100">{{ $statistics['total_dossing'] }}</h2>
@@ -624,7 +643,7 @@ new class extends Component {
             <!-- Left Side: Chart Area -->
             <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
                 
-                <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Daily Trend Chart pH") ." (5 Minutes Interval)" }}</h3>
+                <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Trend Chart pH") ." (5 Minutes Interval)" }}</h3>
                 
                 @if(empty($chartData['labels']) || count($chartData['labels']) === 0)
                     <div class="flex items-center justify-center" style="height: 350px;">
@@ -667,9 +686,10 @@ new class extends Component {
                             const stdMinPh = {{ $stdMinPh }};
                             const stdMaxPh = {{ $stdMaxPh }};
                             
-                            const phSeries = chartData.phValues || [];
+                            const phSeries = (chartData.phValues || []).map(v => (v === null || v === undefined || isNaN(v)) ? 0 : parseFloat(v));
                             const labels = chartData.labels || [];
                             const dosingMarkers = chartData.dosingMarkers || [];
+                            const dosingInfo = chartData.dosingInfo || [];
                             
                             if (labels.length === 0) {
                                 return;
@@ -682,12 +702,41 @@ new class extends Component {
                             const textColor = isDark ? '#d4d4d4' : '#525252';
                             const gridColor = isDark ? '#404040' : '#e5e7eb';
                             
+                            // Build point annotations for dosing events
+                            const dosingAnnotations = [];
+                            dosingMarkers.forEach((value, index) => {
+                                if (value !== null && value !== undefined && !isNaN(value) && isFinite(value) && labels[index]) {
+                                    dosingAnnotations.push({
+                                        x: labels[index],
+                                        y: parseFloat(value),
+                                        marker: {
+                                            size: 8,
+                                            fillColor: '#10b981',
+                                            strokeColor: '#fff',
+                                            strokeWidth: 2,
+                                            shape: 'circle'
+                                        },
+                                        label: {
+                                            text: '\u25BC',
+                                            borderColor: 'transparent',
+                                            style: {
+                                                background: 'transparent',
+                                                color: '#10b981',
+                                                fontSize: '14px',
+                                                fontWeight: 'bold',
+                                                padding: { left: 2, right: 2, top: 0, bottom: 0 }
+                                            },
+                                            offsetY: -15
+                                        }
+                                    });
+                                }
+                            });
+                            
                             const options = {
                                 series: [
-                                    { name: 'Nilai pH', data: phSeries, type: 'line' },
-                                    { name: 'Batas Maksimal (pH ' + stdMaxPh + ')', data: maxLimit, type: 'line' },
-                                    { name: 'Batas Minimal (pH ' + stdMinPh + ')', data: minLimit, type: 'line' },
-                                    { name: 'Dosing Event', data: dosingMarkers, type: 'scatter' }
+                                    { name: 'Nilai pH', data: phSeries },
+                                    { name: 'Batas Maksimal (pH ' + stdMaxPh + ')', data: maxLimit },
+                                    { name: 'Batas Minimal (pH ' + stdMinPh + ')', data: minLimit }
                                 ],
                                 chart: {
                                     height: 350,
@@ -699,29 +748,19 @@ new class extends Component {
                                     animations: { enabled: true, easing: 'easeinout', speed: 800 },
                                     background: 'transparent'
                                 },
-                                colors: ['#3b82f6', '#ef4444', '#ef4444', '#10b981'],
-                                stroke: { width: [3, 2, 2, 0], curve: 'smooth', dashArray: [0, 5, 5, 0] },
+                                annotations: {
+                                    points: dosingAnnotations
+                                },
+                                colors: ['#3b82f6', '#ef4444', '#ef4444'],
+                                stroke: { width: [3, 2, 2], curve: 'smooth', dashArray: [0, 5, 5] },
                                 markers: {
-                                    size: [5, 0, 0, 0],
-                                    colors: ['#3b82f6', '#ef4444', '#ef4444', '#10b981'],
+                                    size: [4, 0, 0],
+                                    colors: ['#3b82f6', '#ef4444', '#ef4444'],
                                     strokeColors: '#fff',
                                     strokeWidth: 2,
-                                    hover: { size: [7, 0, 0, 0] }
+                                    hover: { sizeOffset: 3 }
                                 },
-                                dataLabels: {
-                                    enabled: true,
-                                    enabledOnSeries: [3],
-                                    formatter: function(value) {
-                                        return value !== null && value !== undefined ? '▼' : '';
-                                    },
-                                    style: {
-                                        fontSize: '16px',
-                                        fontWeight: 'bold',
-                                        colors: ['#10b981']
-                                    },
-                                    background: { enabled: false },
-                                    offsetY: -5
-                                },
+                                dataLabels: { enabled: false },
                                 xaxis: {
                                     categories: labels,
                                     title: { text: 'Waktu', style: { fontSize: '12px', color: textColor } },
@@ -766,14 +805,31 @@ new class extends Component {
                                     shared: true,
                                     intersect: false,
                                     theme: isDark ? 'dark' : 'light',
-                                    y: { 
-                                        formatter: function(value) { 
-                                            if (value === null || value === undefined || isNaN(value)) {
-                                                return 'N/A';
-                                            }
-                                            return Number(value).toFixed(2); 
-                                        } 
-                                    }
+                                    y: [
+                                        { 
+                                            formatter: function(value, { dataPointIndex }) { 
+                                                if (value === null || value === undefined || isNaN(value)) return 'N/A';
+                                                let result = Number(value).toFixed(2);
+                                                const info = dosingInfo[dataPointIndex];
+                                                if (info) {
+                                                    result += ' | Dosing: Total ' + info.total_amount + ' gr, F1: ' + info.formula_1_amount + ' gr, F2: ' + info.formula_2_amount + ' gr, F3: ' + info.formula_3_amount + ' gr';
+                                                }
+                                                return result; 
+                                            } 
+                                        },
+                                        { 
+                                            formatter: function(value) { 
+                                                if (value === null || value === undefined || isNaN(value)) return 'N/A';
+                                                return Number(value).toFixed(2); 
+                                            } 
+                                        },
+                                        { 
+                                            formatter: function(value) { 
+                                                if (value === null || value === undefined || isNaN(value)) return 'N/A';
+                                                return Number(value).toFixed(2); 
+                                            } 
+                                        }
+                                    ]
                                 },
                                 theme: { mode: isDark ? 'dark' : 'light' }
                             };

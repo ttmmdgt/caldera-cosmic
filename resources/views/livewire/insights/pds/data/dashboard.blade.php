@@ -122,7 +122,7 @@ new class extends Component {
             $end = $date->copy()->setTime($endTime->hour, $endTime->minute);
         } else {
             // Fallback to config if no working hours configured
-            $configHours = ['start' => 5.30, 'end' => 17.30];
+            $configHours = ['start' => 5.30, 'end' => 15.00];
             $start = $date->copy()->setTime($configHours['start'], 0);
             $end = $date->copy()->setTime($configHours['end'], 0);
         }
