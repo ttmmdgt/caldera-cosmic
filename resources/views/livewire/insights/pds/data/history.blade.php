@@ -93,7 +93,16 @@ new class extends Component {
     #[On('update')]
     public function refreshChart(): void
     {
-        $this->dispatch('chart-data-updated', chartData: $this->getChartData());
+        try {
+            $chartData = $this->getChartData();
+            
+            // Only dispatch if we have valid chart data
+            if (!empty($chartData) && !empty($chartData['labels']) && !empty($chartData['phValues'])) {
+                $this->dispatch('chart-data-updated', chartData: $chartData);
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Error refreshing chart: ' . $e->getMessage());
+        }
     }
     
     public function getStatistics()
@@ -170,17 +179,19 @@ new class extends Component {
                     ];
                 }
                 
-                // Accumulate pH values using sum/count approach
+                // Accumulate pH values using sum/count approach - validate before adding
                 $phFloat = (float) $phValue;
-                $fiveMinuteStats[$intervalKey]['ph_sum'] += $phFloat;
-                $fiveMinuteStats[$intervalKey]['ph_count']++;
-                
-                // Track min/max pH
-                if ($phFloat > $fiveMinuteStats[$intervalKey]['ph_max']) {
-                    $fiveMinuteStats[$intervalKey]['ph_max'] = $phFloat;
-                }
-                if ($phFloat < $fiveMinuteStats[$intervalKey]['ph_min']) {
-                    $fiveMinuteStats[$intervalKey]['ph_min'] = $phFloat;
+                if (is_finite($phFloat) && !is_nan($phFloat)) {
+                    $fiveMinuteStats[$intervalKey]['ph_sum'] += $phFloat;
+                    $fiveMinuteStats[$intervalKey]['ph_count']++;
+                    
+                    // Track min/max pH
+                    if ($phFloat > $fiveMinuteStats[$intervalKey]['ph_max']) {
+                        $fiveMinuteStats[$intervalKey]['ph_max'] = $phFloat;
+                    }
+                    if ($phFloat < $fiveMinuteStats[$intervalKey]['ph_min']) {
+                        $fiveMinuteStats[$intervalKey]['ph_min'] = $phFloat;
+                    }
                 }
             }
             
@@ -233,17 +244,24 @@ new class extends Component {
                     ? $data['ph_sum'] / $data['ph_count'] 
                     : 0;
                 
+                // Validate avgPh
+                if (!is_finite($avgPh) || is_nan($avgPh)) {
+                    continue; // Skip intervals with invalid pH
+                }
+                
                 $maxPhInInterval = $data['ph_max'];
                 $minPhInInterval = $data['ph_min'] !== PHP_FLOAT_MAX ? $data['ph_min'] : 0;
                 
                 // Track highest and lowest AVERAGE pH (to match chart display)
                 if ($data['ph_count'] > 0) {
-                    if ($avgPh > $highestPh) {
-                        $highestPh = $avgPh;
-                    }
-                    
-                    if ($avgPh < $lowestPh) {
-                        $lowestPh = $avgPh;
+                    if (is_finite($avgPh) && !is_nan($avgPh)) {
+                        if ($avgPh > $highestPh) {
+                            $highestPh = $avgPh;
+                        }
+                        
+                        if ($avgPh < $lowestPh) {
+                            $lowestPh = $avgPh;
+                        }
                     }
                 }
                 
@@ -388,9 +406,12 @@ new class extends Component {
                     ];
                 }
                 
-                // Accumulate pH values
-                $fiveMinuteData[$intervalKey]['sum'] += (float) $phValue;
-                $fiveMinuteData[$intervalKey]['count']++;
+                // Accumulate pH values - validate before adding
+                $phFloat = (float) $phValue;
+                if (is_finite($phFloat) && !is_nan($phFloat)) {
+                    $fiveMinuteData[$intervalKey]['sum'] += $phFloat;
+                    $fiveMinuteData[$intervalKey]['count']++;
+                }
             }
 
             // Process dosing events and mark intervals
@@ -467,6 +488,12 @@ new class extends Component {
                 }
                 
                 $avgPh = $intervalInfo['sum'] / $intervalInfo['count'];
+                
+                // Validate avgPh before using it
+                if (!is_finite($avgPh) || is_nan($avgPh)) {
+                    continue; // Skip intervals with invalid pH
+                }
+                
                 $lastKnownPh = round($avgPh, 2);
                 
                 // Format label based on date range
@@ -654,12 +681,27 @@ new class extends Component {
                     wire:key="chart-container-{{ md5(json_encode($chartData)) }}"
                     x-data="{ 
                         chart: null,
+                        renderTimeout: null,
+                        isRendering: false,
+                        renderRetries: 0,
+                        maxRenderRetries: 10,
                         init() {
                             this.$nextTick(() => this.initChart());
                         },
                         destroy() {
+                            this.cleanupChart();
+                        },
+                        cleanupChart() {
+                            if (this.renderTimeout) {
+                                clearTimeout(this.renderTimeout);
+                                this.renderTimeout = null;
+                            }
                             if (this.chart) {
-                                try { this.chart.destroy(); } catch(e) {}
+                                try { 
+                                    this.chart.destroy(); 
+                                } catch(e) {
+                                    console.warn('Chart cleanup error:', e);
+                                }
                                 this.chart = null;
                             }
                         },
@@ -668,77 +710,188 @@ new class extends Component {
                                 setTimeout(() => this.initChart(), 100);
                                 return;
                             }
+                            this.renderChart();
+                        },
+                        renderChart() {
+                            // Debounce rapid updates
+                            if (this.renderTimeout) {
+                                clearTimeout(this.renderTimeout);
+                            }
                             
-                            const chartElement = this.$refs.chartContainer;
-                            if (!chartElement) {
+                            this.renderTimeout = setTimeout(() => {
+                                this.doRenderChart();
+                            }, 50);
+                        },
+                        doRenderChart() {
+                            // Prevent concurrent renders
+                            if (this.isRendering) {
                                 return;
                             }
                             
-                            // Destroy existing chart
-                            if (this.chart) {
-                                try {
-                                    this.chart.destroy();
-                                } catch(e) {}
-                                this.chart = null;
-                            }
+                            this.isRendering = true;
                             
-                            const chartData = @js($chartData);
-                            const stdMinPh = {{ $stdMinPh }};
-                            const stdMaxPh = {{ $stdMaxPh }};
-                            
-                            const phSeries = (chartData.phValues || []).map(v => (v === null || v === undefined || isNaN(v)) ? 0 : parseFloat(v));
-                            const labels = chartData.labels || [];
-                            const dosingMarkers = chartData.dosingMarkers || [];
-                            const dosingInfo = chartData.dosingInfo || [];
-                            
-                            if (labels.length === 0) {
-                                return;
-                            }
-                            
-                            const maxLimit = Array(labels.length).fill(stdMaxPh);
-                            const minLimit = Array(labels.length).fill(stdMinPh);
-                            
-                            const isDark = document.documentElement.classList.contains('dark');
-                            const textColor = isDark ? '#d4d4d4' : '#525252';
-                            const gridColor = isDark ? '#404040' : '#e5e7eb';
-                            
-                            // Build point annotations for dosing events
-                            const dosingAnnotations = [];
-                            dosingMarkers.forEach((value, index) => {
-                                if (value !== null && value !== undefined && !isNaN(value) && isFinite(value) && labels[index]) {
-                                    dosingAnnotations.push({
-                                        x: labels[index],
-                                        y: parseFloat(value),
-                                        marker: {
-                                            size: 8,
-                                            fillColor: '#10b981',
-                                            strokeColor: '#fff',
-                                            strokeWidth: 2,
-                                            shape: 'circle'
-                                        },
-                                        label: {
-                                            text: '\u25BC',
-                                            borderColor: 'transparent',
-                                            style: {
-                                                background: 'transparent',
-                                                color: '#10b981',
-                                                fontSize: '14px',
-                                                fontWeight: 'bold',
-                                                padding: { left: 2, right: 2, top: 0, bottom: 0 }
-                                            },
-                                            offsetY: -15
-                                        }
-                                    });
+                            try {
+                                const chartElement = this.$refs.chartContainer;
+                                
+                                // Safety checks
+                                if (!chartElement || !chartElement.isConnected) {
+                                    console.warn('Chart container not found or not in DOM');
+                                    return;
                                 }
-                            });
-                            
-                            const options = {
-                                series: [
-                                    { name: 'Nilai pH', data: phSeries },
-                                    { name: 'Batas Maksimal (pH ' + stdMaxPh + ')', data: maxLimit },
-                                    { name: 'Batas Minimal (pH ' + stdMinPh + ')', data: minLimit }
-                                ],
+                                
+                                // Ensure container has valid dimensions
+                                const rect = chartElement.getBoundingClientRect();
+                                if (!rect || rect.width === 0 || rect.height === 0 || !isFinite(rect.width) || !isFinite(rect.height)) {
+                                    if (this.renderRetries < this.maxRenderRetries) {
+                                        this.renderRetries++;
+                                        console.warn(`Chart container has invalid dimensions, retry ${this.renderRetries}/${this.maxRenderRetries}`, rect);
+                                        // Retry after a short delay
+                                        setTimeout(() => this.renderChart(), 100);
+                                    } else {
+                                        console.error('Max render retries reached, container still has invalid dimensions', rect);
+                                    }
+                                    return;
+                                }
+                                
+                                // Reset retry counter on successful dimension check
+                                this.renderRetries = 0;
+                                
+                                // Destroy existing chart
+                                if (this.chart) {
+                                    try {
+                                        this.chart.destroy();
+                                    } catch(e) {
+                                        console.warn('Error destroying existing chart:', e);
+                                    }
+                                    this.chart = null;
+                                }
+                                
+                                const chartData = @js($chartData);
+                                const stdMinPh = {{ is_numeric($stdMinPh) && is_finite($stdMinPh) ? $stdMinPh : 2 }};
+                                const stdMaxPh = {{ is_numeric($stdMaxPh) && is_finite($stdMaxPh) ? $stdMaxPh : 3 }};
+                                
+                                // Validate and synchronize all arrays - filter invalid entries across all arrays
+                                const rawPhValues = chartData.phValues || [];
+                                const rawLabels = chartData.labels || [];
+                                const rawDosingMarkers = chartData.dosingMarkers || [];
+                                const rawDosingInfo = chartData.dosingInfo || [];
+                                
+                                // Build synchronized arrays by filtering out invalid pH values
+                                const phSeries = [];
+                                const labels = [];
+                                const dosingMarkers = [];
+                                const dosingInfo = [];
+                                
+                                for (let i = 0; i < rawPhValues.length; i++) {
+                                    const phValue = rawPhValues[i];
+                                    
+                                    // Only include if pH value is valid
+                                    if (phValue !== null && 
+                                        phValue !== undefined && 
+                                        typeof phValue === 'number' &&
+                                        isFinite(phValue) && 
+                                        !isNaN(phValue)) {
+                                        
+                                        const parsedPh = parseFloat(phValue);
+                                        if (isFinite(parsedPh) && !isNaN(parsedPh)) {
+                                            phSeries.push(parsedPh);
+                                            labels.push(rawLabels[i] || '');
+                                            dosingMarkers.push(rawDosingMarkers[i]);
+                                            dosingInfo.push(rawDosingInfo[i]);
+                                        }
+                                    }
+                                }
+                                
+                                // Ensure we have valid data
+                                if (labels.length === 0 || phSeries.length === 0) {
+                                    console.warn('No valid data to display after filtering');
+                                    return;
+                                }
+                                
+                                // Verify arrays are synchronized
+                                if (phSeries.length !== labels.length) {
+                                    console.error('Data array mismatch:', { phSeries: phSeries.length, labels: labels.length });
+                                    return;
+                                }
+                                
+                                // Validate pH limits
+                                const safeStdMaxPh = (typeof stdMaxPh === 'number' && isFinite(stdMaxPh) && !isNaN(stdMaxPh)) ? stdMaxPh : 3;
+                                const safeStdMinPh = (typeof stdMinPh === 'number' && isFinite(stdMinPh) && !isNaN(stdMinPh)) ? stdMinPh : 2;
+                                
+                                const maxLimit = Array(labels.length).fill(safeStdMaxPh);
+                                const minLimit = Array(labels.length).fill(safeStdMinPh);
+                                
+                                const isDark = document.documentElement.classList.contains('dark');
+                                const textColor = isDark ? '#d4d4d4' : '#525252';
+                                const gridColor = isDark ? '#404040' : '#e5e7eb';
+                                
+                                // Build point annotations for dosing events
+                                const dosingAnnotations = [];
+                                dosingMarkers.forEach((value, index) => {
+                                    // Strict validation to prevent NaN in annotations
+                                    if (value !== null && 
+                                        value !== undefined && 
+                                        typeof value === 'number' &&
+                                        isFinite(value) && 
+                                        !isNaN(value) && 
+                                        labels[index]) {
+                                        try {
+                                            const yValue = parseFloat(value);
+                                            if (isFinite(yValue) && !isNaN(yValue)) {
+                                                dosingAnnotations.push({
+                                                    x: labels[index],
+                                                    y: yValue,
+                                                    marker: {
+                                                        size: 8,
+                                                        fillColor: '#10b981',
+                                                        strokeColor: '#fff',
+                                                        strokeWidth: 2,
+                                                        shape: 'circle'
+                                                    },
+                                                    label: {
+                                                        text: '\u25BC',
+                                                        borderColor: 'transparent',
+                                                        style: {
+                                                            background: 'transparent',
+                                                            color: '#10b981',
+                                                            fontSize: '14px',
+                                                            fontWeight: 'bold',
+                                                            padding: { left: 2, right: 2, top: 0, bottom: 0 }
+                                                        },
+                                                        offsetY: -15
+                                                    }
+                                                });
+                                            }
+                                        } catch(e) {
+                                            console.warn('Error adding dosing annotation:', e);
+                                        }
+                                    }
+                                });
+                                
+                                // Final validation: ensure no NaN in any series
+                                const hasNaN = phSeries.some(v => !isFinite(v) || isNaN(v)) ||
+                                               maxLimit.some(v => !isFinite(v) || isNaN(v)) ||
+                                               minLimit.some(v => !isFinite(v) || isNaN(v));
+                                
+                                if (hasNaN) {
+                                    console.error('NaN detected in series data, aborting chart render', {
+                                        phSeries: phSeries,
+                                        maxLimit: maxLimit,
+                                        minLimit: minLimit,
+                                        safeStdMaxPh: safeStdMaxPh,
+                                        safeStdMinPh: safeStdMinPh
+                                    });
+                                    return;
+                                }
+                                
+                                const options = {
+                                    series: [
+                                        { name: 'Nilai pH', data: phSeries },
+                                        { name: 'Batas Maksimal (pH ' + safeStdMaxPh + ')', data: maxLimit },
+                                        { name: 'Batas Minimal (pH ' + safeStdMinPh + ')', data: minLimit }
+                                    ],
                                 chart: {
+                                    width: rect.width || '100%',
                                     height: 350,
                                     type: 'line',
                                     toolbar: {
@@ -752,11 +905,11 @@ new class extends Component {
                                     points: dosingAnnotations
                                 },
                                 colors: ['#3b82f6', '#ef4444', '#ef4444'],
-                                stroke: { width: [3, 2, 2], curve: 'smooth', dashArray: [0, 5, 5] },
+                                stroke: { width: [3, 2, 2], curve: phSeries.length < 3 ? 'straight' : 'smooth', dashArray: [0, 5, 5] },
                                 markers: {
-                                    size: [4, 0, 0],
-                                    colors: ['#3b82f6', '#ef4444', '#ef4444'],
-                                    strokeColors: '#fff',
+                                    size: [4, 0.1, 0.1],
+                                    colors: ['#3b82f6', 'transparent', 'transparent'],
+                                    strokeColors: ['#fff', 'transparent', 'transparent'],
                                     strokeWidth: 2,
                                     hover: { sizeOffset: 3 }
                                 },
@@ -833,16 +986,24 @@ new class extends Component {
                                 },
                                 theme: { mode: isDark ? 'dark' : 'light' }
                             };
-                            
-                            try {
-                                this.chart = new ApexCharts(chartElement, options);
-                                this.chart.render();
-                            } catch(error) {
-                                console.error('Chart render error:', error);
+                                
+                                try {
+                                    this.chart = new ApexCharts(chartElement, options);
+                                    this.chart.render();
+                                } catch(error) {
+                                    console.error('Chart render error:', error);
+                                    this.cleanupChart();
+                                }
+                            } finally {
+                                this.isRendering = false;
                             }
                         }
                     }"
-                    @caldera-theme-changed.window="initChart()"
+                    x-init="
+                        $nextTick(() => initChart());
+                        $el.addEventListener('livewire:navigating', () => cleanupChart());
+                    "
+                    @caldera-theme-changed.window="renderChart()"
                 >
                     <div x-ref="chartContainer" wire:ignore style="height: 350px; min-height: 350px;"></div>
                 </div>

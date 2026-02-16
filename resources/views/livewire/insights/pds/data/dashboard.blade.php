@@ -81,10 +81,14 @@ new class extends Component {
     #[On('update')]
     public function refreshCharts(): void
     {
-        $this->loadOnlineStats();
-        $this->dispatch('chart-data-updated', chartData: $this->getChartData());
-        $this->dispatch('refresh-online-chart', onlineData: $this->prepareOnlineChartData());
-        $this->dispatch('refresh-status-chart', statusData: $this->prepareStatusChartData());
+        try {
+            $this->loadOnlineStats();
+            
+            $this->dispatch('refresh-online-chart', onlineData: $this->prepareOnlineChartData());
+            $this->dispatch('refresh-status-chart', statusData: $this->prepareStatusChartData());
+        } catch (\Exception $e) {
+            \Log::warning('Error refreshing charts: ' . $e->getMessage());
+        }
     }
     
     public function statsByStatus()
@@ -133,9 +137,9 @@ new class extends Component {
         $formatter = app(DurationFormatterService::class);
         
         $this->onlineStats = [
-            'online_percentage' => $stats['online_percentage'],
-            'offline_percentage' => $stats['offline_percentage'],
-            'timeout_percentage' => $stats['timeout_percentage'],
+            'online_percentage' => $this->sanitizeChartValue($stats['online_percentage']),
+            'offline_percentage' => $this->sanitizeChartValue($stats['offline_percentage']),
+            'timeout_percentage' => $this->sanitizeChartValue($stats['timeout_percentage']),
             'online_time' => $formatter->format($stats['online_duration']),
             'offline_time' => $formatter->format($stats['offline_duration']),
             'timeout_time' => $formatter->format($stats['timeout_duration']),
@@ -292,17 +296,17 @@ new class extends Component {
                 'normal_count' => $normalCount,
                 'normal_minutes' => $normalMinutes,
                 'normal_time' => $normalTime,
-                'normal_percentage' => round($normalPercentage, 2),
+                'normal_percentage' => $this->sanitizeChartValue(round($normalPercentage, 2)),
                 
                 'high_count' => $highCount,
                 'high_minutes' => $highMinutes,
                 'high_time' => $highTime,
-                'high_percentage' => round($highPercentage, 2),
+                'high_percentage' => $this->sanitizeChartValue(round($highPercentage, 2)),
                 
                 'low_count' => $lowCount,
                 'low_minutes' => $lowMinutes,
                 'low_time' => $lowTime,
-                'low_percentage' => round($lowPercentage, 2),
+                'low_percentage' => $this->sanitizeChartValue(round($lowPercentage, 2)),
                 
                 'total_working_hours' => $totalWorkingHours,
                 'total_working_minutes' => $totalWorkingMinutes,
@@ -337,15 +341,27 @@ new class extends Component {
         ];
     }
     
+    private function sanitizeChartValue($value): float
+    {
+        if ($value === null || !is_numeric($value)) {
+            return 0;
+        }
+        $float = (float) $value;
+        if (!is_finite($float) || is_nan($float)) {
+            return 0;
+        }
+        return $float;
+    }
+
     private function prepareOnlineChartData(): array
     {
         return [
             'labels' => ['Online', 'Offline', 'Timeout (RTO)'],
             'datasets' => [[
                 'data' => [
-                    $this->onlineStats['online_percentage'] ?? 0,
-                    $this->onlineStats['offline_percentage'] ?? 0,
-                    $this->onlineStats['timeout_percentage'] ?? 0
+                    $this->sanitizeChartValue($this->onlineStats['online_percentage'] ?? 0),
+                    $this->sanitizeChartValue($this->onlineStats['offline_percentage'] ?? 0),
+                    $this->sanitizeChartValue($this->onlineStats['timeout_percentage'] ?? 0),
                 ],
                 'backgroundColor' => [
                     'rgba(34, 197, 94, 0.8)',
@@ -368,7 +384,11 @@ new class extends Component {
         return [
             'labels' => ['Normal pH', 'High pH', 'Low pH'],
             'datasets' => [[
-                'data' => [$stats['normal_percentage'] ?? 0, $stats['high_percentage'] ?? 0, $stats['low_percentage'] ?? 0],
+                'data' => [
+                    $this->sanitizeChartValue($stats['normal_percentage'] ?? 0),
+                    $this->sanitizeChartValue($stats['high_percentage'] ?? 0),
+                    $this->sanitizeChartValue($stats['low_percentage'] ?? 0),
+                ],
                 'backgroundColor' => [
                     'rgba(34, 197, 94, 0.8)',   // green for Normal pH
                     'rgba(239, 68, 68, 0.8)',    // red for High pH
@@ -552,9 +572,12 @@ new class extends Component {
                     ];
                 }
                 
-                // Accumulate pH values
-                $hourlyData[$hourKey]['sum'] += (float) $phValue;
-                $hourlyData[$hourKey]['count']++;
+                // Accumulate pH values - validate before adding
+                $phFloat = (float) $phValue;
+                if (is_finite($phFloat) && !is_nan($phFloat)) {
+                    $hourlyData[$hourKey]['sum'] += $phFloat;
+                    $hourlyData[$hourKey]['count']++;
+                }
             }
 
             // Process dosing events and mark intervals
@@ -591,7 +614,19 @@ new class extends Component {
             ksort($hourlyData);
             
             foreach ($hourlyData as $hourKey => $hourInfo) {
-                $avgPh = $hourInfo['count'] > 0 ? $hourInfo['sum'] / $hourInfo['count'] : 0;
+                $hasPh = $hourInfo['count'] > 0;
+                
+                // Skip intervals with no pH data to avoid NaN in SVG path rendering
+                if (!$hasPh) {
+                    continue;
+                }
+                
+                $avgPh = $hourInfo['sum'] / $hourInfo['count'];
+                
+                // Validate avgPh before using it
+                if (!is_finite($avgPh) || is_nan($avgPh)) {
+                    continue;
+                }
                 
                 // Format label based on date range
                 if ($showDate) {
@@ -849,44 +884,142 @@ new class extends Component {
         <div class="mt-3" wire:key="chart-{{ $start_at }}-{{ $end_at }}-{{ $plant }}">
             <div class="bg-white dark:bg-neutral-800 shadow sm:rounded-lg p-6">
                 <h3 class="text-lg text-center font-semibold text-neutral-700 dark:text-neutral-300 mb-4">{{ __("Daily Trend Chart pH") ." (1 Hour Interval)" }}</h3>
-                    <div 
-                        x-data="{ 
-                            chartData: @js($chartData),
-                            chart: null,
-                            stdMaxPh: {{ $stdMaxPh }},
-                            stdMinPh: {{ $stdMinPh }},
-                            initChart() {
-                                if (typeof ApexCharts === 'undefined') {
-                                    setTimeout(() => this.initChart(), 100);
+                
+                @if(empty($chartData['labels']) || count($chartData['labels']) === 0)
+                    <div class="flex items-center justify-center" style="height: 400px;">
+                        <p class="text-neutral-500 dark:text-neutral-400 text-lg">{{ __("No data available for selected filters") }}</p>
+                    </div>
+                @else
+                <div 
+                    wire:key="chart-container-{{ md5(json_encode($chartData)) }}"
+                    x-data="{ 
+                        chart: null,
+                        renderTimeout: null,
+                        isRendering: false,
+                        renderRetries: 0,
+                        maxRenderRetries: 10,
+                        init() {
+                            this.$nextTick(() => this.initChart());
+                        },
+                        destroy() {
+                            this.cleanupChart();
+                        },
+                        cleanupChart() {
+                            if (this.renderTimeout) {
+                                clearTimeout(this.renderTimeout);
+                                this.renderTimeout = null;
+                            }
+                            if (this.chart) {
+                                try { 
+                                    this.chart.destroy(); 
+                                } catch(e) {}
+                                this.chart = null;
+                            }
+                        },
+                        initChart() {
+                            if (typeof ApexCharts === 'undefined') {
+                                setTimeout(() => this.initChart(), 100);
+                                return;
+                            }
+                            this.renderChart();
+                        },
+                        renderChart() {
+                            if (this.renderTimeout) {
+                                clearTimeout(this.renderTimeout);
+                            }
+                            this.renderTimeout = setTimeout(() => {
+                                this.doRenderChart();
+                            }, 50);
+                        },
+                        doRenderChart() {
+                            if (this.isRendering) {
+                                return;
+                            }
+                            
+                            this.isRendering = true;
+                            
+                            try {
+                                const chartElement = this.$refs.chartContainer;
+                                
+                                if (!chartElement || !chartElement.isConnected) {
                                     return;
                                 }
-                                this.renderChart(this.chartData);
-                            },
-                            renderChart(data) {
-                                const chartElement = this.$refs.chartContainer;
-                                if (!chartElement || !data || !data.labels || !data.phValues) return;
+                                
+                                const rect = chartElement.getBoundingClientRect();
+                                if (!rect || rect.width === 0 || rect.height === 0 || !isFinite(rect.width) || !isFinite(rect.height)) {
+                                    if (this.renderRetries < this.maxRenderRetries) {
+                                        this.renderRetries++;
+                                        setTimeout(() => this.renderChart(), 100);
+                                    }
+                                    return;
+                                }
+                                
+                                this.renderRetries = 0;
                                 
                                 if (this.chart) {
-                                    this.chart.destroy();
+                                    try { this.chart.destroy(); } catch(e) {}
                                     this.chart = null;
                                 }
                                 
-                                const phSeries = data.phValues || [];
-                                const labels = data.labels || [];
-                                const maxLimit = Array(labels.length).fill(this.stdMaxPh);
-                                const minLimit = Array(labels.length).fill(this.stdMinPh);
+                                const chartData = @js($chartData);
+                                const stdMinPh = {{ is_numeric($stdMinPh) && is_finite($stdMinPh) ? $stdMinPh : 2 }};
+                                const stdMaxPh = {{ is_numeric($stdMaxPh) && is_finite($stdMaxPh) ? $stdMaxPh : 3 }};
+                                
+                                const rawPhValues = chartData.phValues || [];
+                                const rawLabels = chartData.labels || [];
+                                
+                                const phSeries = [];
+                                const labels = [];
+                                
+                                for (let i = 0; i < rawPhValues.length; i++) {
+                                    const phValue = rawPhValues[i];
+                                    if (phValue !== null && 
+                                        phValue !== undefined && 
+                                        typeof phValue === 'number' &&
+                                        isFinite(phValue) && 
+                                        !isNaN(phValue)) {
+                                        const parsedPh = parseFloat(phValue);
+                                        if (isFinite(parsedPh) && !isNaN(parsedPh)) {
+                                            phSeries.push(parsedPh);
+                                            labels.push(rawLabels[i] || '');
+                                        }
+                                    }
+                                }
+                                
+                                if (phSeries.length === 0 || labels.length === 0) {
+                                    return;
+                                }
+                                
+                                if (phSeries.length !== labels.length) {
+                                    return;
+                                }
+                                
+                                const safeStdMaxPh = (typeof stdMaxPh === 'number' && isFinite(stdMaxPh) && !isNaN(stdMaxPh)) ? stdMaxPh : 3;
+                                const safeStdMinPh = (typeof stdMinPh === 'number' && isFinite(stdMinPh) && !isNaN(stdMinPh)) ? stdMinPh : 2;
+                                
+                                const maxLimit = Array(labels.length).fill(safeStdMaxPh);
+                                const minLimit = Array(labels.length).fill(safeStdMinPh);
                                 
                                 const isDark = document.documentElement.classList.contains('dark');
                                 const textColor = isDark ? '#d4d4d4' : '#525252';
                                 const gridColor = isDark ? '#404040' : '#e5e7eb';
                                 
+                                const hasNaN = phSeries.some(v => !isFinite(v) || isNaN(v)) ||
+                                               maxLimit.some(v => !isFinite(v) || isNaN(v)) ||
+                                               minLimit.some(v => !isFinite(v) || isNaN(v));
+                                
+                                if (hasNaN) {
+                                    return;
+                                }
+                                
                                 const options = {
                                     series: [
-                                        { name: 'Nilai pH', data: phSeries, type: 'line' },
-                                        { name: 'Batas Maksimal (pH ' + this.stdMaxPh + ')', data: maxLimit, type: 'line' },
-                                        { name: 'Batas Minimal (pH ' + this.stdMinPh + ')', data: minLimit, type: 'line' }
+                                        { name: 'Nilai pH', data: phSeries },
+                                        { name: 'Batas Maksimal (pH ' + safeStdMaxPh + ')', data: maxLimit },
+                                        { name: 'Batas Minimal (pH ' + safeStdMinPh + ')', data: minLimit }
                                     ],
                                     chart: {
+                                        width: rect.width || '100%',
                                         height: 400,
                                         type: 'line',
                                         toolbar: {
@@ -897,14 +1030,15 @@ new class extends Component {
                                         background: 'transparent'
                                     },
                                     colors: ['#3b82f6', '#ef4444', '#ef4444'],
-                                    stroke: { width: [3, 2, 2], curve: 'smooth', dashArray: [0, 5, 5] },
+                                    stroke: { width: [3, 2, 2], curve: phSeries.length < 3 ? 'straight' : 'smooth', dashArray: [0, 5, 5] },
                                     markers: {
-                                        size: [5, 0, 0],
-                                        colors: ['#3b82f6', '#ef4444', '#ef4444'],
-                                        strokeColors: '#fff',
+                                        size: [4, 0.1, 0.1],
+                                        colors: ['#3b82f6', 'transparent', 'transparent'],
+                                        strokeColors: ['#fff', 'transparent', 'transparent'],
                                         strokeWidth: 2,
-                                        hover: { size: [7, 0, 0] }
+                                        hover: { sizeOffset: 3 }
                                     },
+                                    dataLabels: { enabled: false },
                                     xaxis: {
                                         categories: labels,
                                         title: { text: 'Waktu', style: { fontSize: '12px', color: textColor } },
@@ -923,7 +1057,10 @@ new class extends Component {
                                         tickAmount: 8,
                                         labels: {
                                             style: { colors: textColor, fontSize: '11px' },
-                                            formatter: function(value) { return value.toFixed(1); }
+                                            formatter: function(value) { 
+                                                if (value === null || value === undefined || isNaN(value) || !isFinite(value)) return '0.0';
+                                                return Number(value).toFixed(1); 
+                                            }
                                         }
                                     },
                                     grid: {
@@ -944,41 +1081,53 @@ new class extends Component {
                                         shared: true,
                                         intersect: false,
                                         theme: isDark ? 'dark' : 'light',
-                                        y: { formatter: function(value) { return value !== undefined ? value.toFixed(2) : 'N/A'; } }
+                                        y: [
+                                            { 
+                                                formatter: function(value) { 
+                                                    if (value === null || value === undefined || isNaN(value) || !isFinite(value)) return 'N/A';
+                                                    return Number(value).toFixed(2); 
+                                                } 
+                                            },
+                                            { 
+                                                formatter: function(value) { 
+                                                    if (value === null || value === undefined || isNaN(value) || !isFinite(value)) return 'N/A';
+                                                    return Number(value).toFixed(2); 
+                                                } 
+                                            },
+                                            { 
+                                                formatter: function(value) { 
+                                                    if (value === null || value === undefined || isNaN(value) || !isFinite(value)) return 'N/A';
+                                                    return Number(value).toFixed(2); 
+                                                } 
+                                            }
+                                        ]
                                     },
-                                    theme: { mode: isDark ? 'dark' : 'light' },
-                                    noData: {
-                                        text: 'No data available',
-                                        align: 'center',
-                                        verticalAlign: 'middle',
-                                        style: { color: textColor, fontSize: '14px' }
-                                    }
+                                    theme: { mode: isDark ? 'dark' : 'light' }
                                 };
                                 
-                                this.chart = new ApexCharts(chartElement, options);
-                                this.chart.render();
+                                try {
+                                    this.chart = new ApexCharts(chartElement, options);
+                                    this.chart.render();
+                                } catch (e) {
+                                    this.cleanupChart();
+                                }
+                            } finally {
+                                this.isRendering = false;
                             }
-                        }"
-                        x-init="$nextTick(() => initChart())"
-                        @chart-data-updated.window="chartData = $event.detail.chartData; renderChart(chartData)"
-                    >
-                        <div x-ref="chartContainer" style="height: 400px; min-height: 400px;"></div>
-                    </div>
+                        }
+                    }"
+                    x-init="
+                        $nextTick(() => initChart());
+                        $el.addEventListener('livewire:navigating', () => cleanupChart());
+                    "
+                    @caldera-theme-changed.window="renderChart()"
+                >
+                    <div x-ref="chartContainer" wire:ignore style="height: 400px; min-height: 400px;"></div>
                 </div>
+                @endif
             </div>
         </div>
     </div>
-
-    <!-- Theme Change Listener -->
-    <script>
-        // Update chart on theme change
-        window.addEventListener('caldera-theme-changed', function() {
-            // Dispatch event to re-render chart with new theme
-            window.dispatchEvent(new CustomEvent('chart-data-updated', {
-                detail: { chartData: @json($chartData) }
-            }));
-        });
-    </script>
 </div>
 
 @script
@@ -986,18 +1135,44 @@ new class extends Component {
         let onlineChart;
         let statusChart;
 
+        function sanitizeChartData(chartData) {
+            if (!chartData || !chartData.datasets || !chartData.datasets[0] || !chartData.datasets[0].data) {
+                return null;
+            }
+            chartData.datasets[0].data = chartData.datasets[0].data.map(function(v) {
+                if (v === null || v === undefined || typeof v !== 'number' || isNaN(v) || !isFinite(v)) {
+                    return 0;
+                }
+                return v;
+            });
+            const total = chartData.datasets[0].data.reduce(function(a, b) { return a + b; }, 0);
+            if (total === 0) {
+                return null;
+            }
+            return chartData;
+        }
+
         function initOnlineChart(onlineData) {
             const onlineCtx = document.getElementById('onlineChart');
             
-            if (onlineCtx) {
+            if (!onlineCtx) {
+                return;
+            }
+            
+            try {
                 const existingOnlineChart = Chart.getChart(onlineCtx);
                 if (existingOnlineChart) {
                     existingOnlineChart.destroy();
                 }
                 
+                const sanitized = sanitizeChartData(onlineData);
+                if (!sanitized) {
+                    return;
+                }
+                
                 onlineChart = new Chart(onlineCtx, {
                     type: 'doughnut',
-                    data: onlineData,
+                    data: sanitized,
                     options: {
                         responsive: true,
                         maintainAspectRatio: true,
@@ -1018,21 +1193,32 @@ new class extends Component {
                         }
                     }
                 });
+            } catch (error) {
+                console.error('Error initializing online chart:', error);
             }
         }
 
         function initStatusChart(statusData) {
             const statusCtx = document.getElementById('statusChart');
             
-            if (statusCtx) {
+            if (!statusCtx) {
+                return;
+            }
+            
+            try {
                 const existingStatusChart = Chart.getChart(statusCtx);
                 if (existingStatusChart) {
                     existingStatusChart.destroy();
                 }
                 
+                const sanitized = sanitizeChartData(statusData);
+                if (!sanitized) {
+                    return;
+                }
+                
                 statusChart = new Chart(statusCtx, {
                     type: 'doughnut',
-                    data: statusData,
+                    data: sanitized,
                     options: {
                         responsive: true,
                         maintainAspectRatio: true,
@@ -1053,38 +1239,52 @@ new class extends Component {
                         }
                     }
                 });
+            } catch (error) {
+                console.error('Error initializing status chart:', error);
             }
         }
 
         // Listen for refresh events
-        Livewire.on('chart-data-updated', (event) => {
-            const data = event[0] || event;
-            // Relay to Alpine via window CustomEvent
-            window.dispatchEvent(new CustomEvent('chart-data-updated', {
-                detail: { chartData: data.chartData }
-            }));
-        });
-
         Livewire.on('refresh-online-chart', (event) => {
-            const data = event[0] || event;
-            initOnlineChart(data.onlineData);
+            try {
+                const data = event[0] || event;
+                if (data && data.onlineData) {
+                    initOnlineChart(data.onlineData);
+                }
+            } catch (error) {
+                console.error('Error handling refresh-online-chart event:', error);
+            }
         });
 
         Livewire.on('refresh-status-chart', (event) => {
-            const data = event[0] || event;
-            initStatusChart(data.statusData);
+            try {
+                const data = event[0] || event;
+                if (data && data.statusData) {
+                    initStatusChart(data.statusData);
+                }
+            } catch (error) {
+                console.error('Error handling refresh-status-chart event:', error);
+            }
         });
 
         // Initial load
+        let onlineChartRetries = 0;
+        let statusChartRetries = 0;
+        const MAX_RETRIES = 10;
+        
         const initializeOnlineChart = () => {
             const onlineData = @json($this->prepareOnlineChartData());
             
             // Wait for DOM to be ready
             if (document.getElementById('onlineChart')) {
                 initOnlineChart(onlineData);
-            } else {
+                onlineChartRetries = 0;
+            } else if (onlineChartRetries < MAX_RETRIES) {
                 // Retry after a short delay if element not found
+                onlineChartRetries++;
                 setTimeout(initializeOnlineChart, 100);
+            } else {
+                console.warn('Online chart element not found after max retries');
             }
         };
 
@@ -1094,15 +1294,30 @@ new class extends Component {
             // Wait for DOM to be ready
             if (document.getElementById('statusChart')) {
                 initStatusChart(statusData);
-            } else {
+                statusChartRetries = 0;
+            } else if (statusChartRetries < MAX_RETRIES) {
                 // Retry after a short delay if element not found
+                statusChartRetries++;
                 setTimeout(initializeStatusChart, 100);
+            } else {
+                console.warn('Status chart element not found after max retries');
             }
         };
 
         // Run after Livewire component is loaded
-        initializeOnlineChart();
-        initializeStatusChart();
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeOnlineChart();
+            initializeStatusChart();
+        });
+        
+        // Also try immediately in case DOMContentLoaded already fired
+        if (document.readyState === 'loading') {
+            // DOM not ready yet
+        } else {
+            // DOM is ready
+            initializeOnlineChart();
+            initializeStatusChart();
+        }
     </script>
     @endscript
 </div>
