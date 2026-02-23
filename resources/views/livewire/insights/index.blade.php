@@ -411,6 +411,23 @@ new #[Layout("layouts.app")] class extends Component {
                                     <i class="icon-chevron-right"></i>
                                 </div>
                             </div>
+                            <a href="#" class="block hover:bg-caldy-500 hover:bg-opacity-10" wire:navigate>
+                            <div class="flex items-center">
+                                <div class="px-6 py-3">
+                                    <img src="/ip_blending_2.png" class="w-16 h-16 dark:invert" />
+                                </div>
+                                <div class="grow">
+                                    <div class="text-lg font-medium text-neutral-900 dark:text-neutral-100">{{ __("Pemantauan IP Blending") }}</div>
+                                    <div class="flex flex-col gap-y-2 text-neutral-600 dark:text-neutral-400">
+                                        <div class="flex items-center gap-x-2 text-xs uppercase text-neutral-500">
+                                            <div>System under construction</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="px-6 py-3 text-lg">
+                                    <i class="icon-chevron-right"></i>
+                                </div>
+                            </div>
                         </a>
                     </div>
                 </div>

@@ -42,6 +42,7 @@ new class extends Component {
     public int $perPage = 20;
     public $view = "raw";
     public $onlineStats = [];
+    public string $lastPhStatus = '';
     
     public function mount()
     {
@@ -57,6 +58,7 @@ new class extends Component {
         $this->loadOnlineStats();
         $this->stdMinPh = $this->getStdMinPh();
         $this->stdMaxPh = $this->getStdMaxPh();
+        $this->checkOneHourAgoPhToast(true);
     }
 
     public function updatedStartAt()
@@ -87,6 +89,7 @@ new class extends Component {
             
             $this->dispatch('refresh-online-chart', onlineData: $this->prepareOnlineChartData());
             $this->dispatch('refresh-status-chart', statusData: $this->prepareStatusChartData());
+            $this->checkOneHourAgoPhToast();
         } catch (\Exception $e) {
             \Log::warning('Error refreshing charts: ' . $e->getMessage());
         }
@@ -95,6 +98,78 @@ new class extends Component {
     public function statsByStatus()
     {
         return $this->getStatsByStatus();
+    }
+
+    public function checkOneHourAgoPhToast(bool $forceShow = false): void
+    {
+        try {
+            $device = InsPhDosingDevice::where('id', $this->plant)->first();
+            if (!$device) {
+                return;
+            }
+
+            $logsCount = InsPhDosingLog::where('device_id', $device->id)
+                ->where('created_at', '>=', Carbon::now()->subHour())
+                ->count();
+
+            if ($logsCount <= 5) {
+                $this->lastPhStatus = '';
+                return;
+            }
+
+            $service = app(GetDataViaModbus::class);
+            $currentPh = $this->getCurrentPh($service);
+
+            if ($currentPh === '-' || !is_numeric($currentPh)) {
+                return;
+            }
+
+            $currentPh = (float) $currentPh;
+            $isStandard = $currentPh >= $this->stdMinPh && $currentPh <= $this->stdMaxPh;
+
+            if ($isStandard) {
+                $this->lastPhStatus = '';
+                return;
+            }
+
+            if ($currentPh > $this->stdMaxPh) {
+                $status = 'high';
+                $icon = '<svg class="w-8 h-8 text-red-500" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12ZM11.9996 7C12.5519 7 12.9996 7.44772 12.9996 8V12C12.9996 12.5523 12.5519 13 11.9996 13C11.4474 13 10.9996 12.5523 10.9996 12V8C10.9996 7.44772 11.4474 7 11.9996 7ZM12.001 14.99C11.4488 14.9892 11.0004 15.4363 10.9997 15.9886L10.9996 15.9986C10.9989 16.5509 11.446 16.9992 11.9982 17C12.5505 17.0008 12.9989 16.5537 12.9996 16.0014L12.9996 15.9914C13.0004 15.4391 12.5533 14.9908 12.001 14.99Z"/></svg>';
+                $bgColor = 'bg-red-200 dark:bg-red-950 border-red-300 dark:border-red-700';
+                $titleColor = 'text-red-700 dark:text-red-300';
+                $message = __('pH Alert: High pH');
+                $description = __('Current pH: ') . '<span class="text-2xl font-black">' . number_format($currentPh, 2) . '</span>'
+                    . ' (> ' . $this->stdMaxPh . ')<br>'
+                    . '<span class="text-xs opacity-75">' . $logsCount . ' ' . __('dosing logs in the last hour') . '</span>';
+            } else {
+                $status = 'low';
+                $icon = '<svg class="w-8 h-8 text-orange-500" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M9.44829 4.46472C10.5836 2.51208 13.4105 2.51168 14.5464 4.46401L21.5988 16.5855C22.7423 18.5509 21.3145 21 19.05 21L4.94967 21C2.68547 21 1.25762 18.5516 2.4004 16.5862L9.44829 4.46472ZM11.9995 8C12.5518 8 12.9995 8.44772 12.9995 9V13C12.9995 13.5523 12.5518 14 11.9995 14C11.4473 14 10.9995 13.5523 10.9995 13V9C10.9995 8.44772 11.4473 8 11.9995 8ZM12.0009 15.99C11.4486 15.9892 11.0003 16.4363 10.9995 16.9886L10.9995 16.9986C10.9987 17.5509 11.4458 17.9992 11.9981 18C12.5504 18.0008 12.9987 17.5537 12.9995 17.0014L12.9995 16.9914C13.0003 16.4391 12.5532 15.9908 12.0009 15.99Z"/></svg>';
+                $bgColor = 'bg-orange-50 dark:bg-orange-950 border-orange-300 dark:border-orange-700';
+                $titleColor = 'text-orange-700 dark:text-orange-300';
+                $message = __('pH Alert: Low pH');
+                $description = __('Current pH: ') . '<span class="text-2xl font-black">' . number_format($currentPh, 2) . '</span>'
+                    . ' (< ' . $this->stdMinPh . ')<br>'
+                    . '<span class="text-xs opacity-75">' . $logsCount . ' ' . __('dosing logs in the last hour') . '</span>';
+            }
+
+            if ($forceShow || $this->lastPhStatus !== $status) {
+                $this->lastPhStatus = $status;
+
+                $html = '<div class="p-5 ' . $bgColor . ' border rounded-lg" style="min-width: 340px;">'
+                    . '<div class="flex items-start gap-4">'
+                    . '<div class="flex-shrink-0 mt-0.5">' . $icon . '</div>'
+                    . '<div class="flex-1">'
+                    . '<p class="text-lg font-bold leading-tight ' . $titleColor . '">' . $message . '</p>'
+                    . '<p class="mt-2 text-sm text-neutral-600 dark:text-neutral-300">' . $description . '</p>'
+                    . '</div>'
+                    . '</div>'
+                    . '</div>';
+
+                $this->js("toast('', { html: `" . $html . "`, position: 'top-center' })");
+            }
+        } catch (\Exception $e) {
+            // silently fail
+        }
     }
     
     private function loadOnlineStats(): void
