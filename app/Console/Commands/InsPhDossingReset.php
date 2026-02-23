@@ -46,9 +46,8 @@ class InsPhDossingReset extends Command
             if ($this->option('v')) {
                 $this->comment("→ Resetting {$device->name} ({$device->ip_address})");
             }
-
             try {
-                $this->resetDevice($device);
+                $this->bruteForceReset($device);
                 $successCount++;
             } catch (\Throwable $th) {
                 $this->error("✗ Error resetting {$device->name} ({$device->ip_address}): " . $th->getMessage() . " on line " . $th->getLine());
@@ -59,6 +58,7 @@ class InsPhDossingReset extends Command
         $this->info("✓ Reset completed. Success: {$successCount}, Errors: {$errorCount}");
         
         return $errorCount > 0 ? 1 : 0;
+
     }
 
     /**
@@ -87,6 +87,50 @@ class InsPhDossingReset extends Command
         } catch (\Exception $e) {
             $this->error("    ✗ Error resetting line {$device->line} at address {$resetAddr}: " . $e->getMessage() . "\n" . $e->getLine());
             throw $e; // Re-throw to be caught by parent try-catch
+        }
+    }
+
+    private function bruteForceReset(InsPhDosingDevice $device, int $attempts = 10)
+    {
+        $unit_id = 1;
+        $resetAddr = 13;
+        $successCount = 0;
+        $lastException = null;
+
+        for ($i = 1; $i <= $attempts; $i++) {
+            try {
+                $request = WriteCoilsBuilder::newWriteMultipleCoils(
+                    'tcp://' . $device->ip_address . ':503',
+                    $unit_id,
+                    1
+                )
+                ->coil($resetAddr, 1)
+                ->build();
+
+                (new NonBlockingClient(['readTimeoutSec' => 2]))->sendRequests($request);
+                $successCount++;
+
+                if ($this->option('d')) {
+                    $this->info("    ✓ Brute reset {$i}/{$attempts} sent to line {$device->line}");
+                }
+            } catch (\Exception $e) {
+                $lastException = $e;
+                if ($this->option('d')) {
+                    $this->warn("    ⟳ Brute reset {$i}/{$attempts} failed for line {$device->line}: " . $e->getMessage());
+                }
+            }
+
+            if ($i < $attempts) {
+                usleep(200_000); // 200ms delay between attempts
+            }
+        }
+
+        if ($this->option('v')) {
+            $this->info("  ✓ Brute force reset done for line {$device->line}: {$successCount}/{$attempts} succeeded");
+        }
+
+        if ($successCount === 0 && $lastException) {
+            throw $lastException;
         }
     }
 }

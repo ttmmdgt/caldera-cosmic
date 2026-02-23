@@ -448,7 +448,6 @@ new class extends Component {
     {
         // 1. Set date to a single day (use start_at or default to today)
         $date = ($this->start_at) ? Carbon::parse($this->start_at)->startOfDay() : now()->startOfDay();
-        // End is same day (we only care about one day)
         $startOfDay = $date->copy();
         $endOfDay = $date->copy()->endOfDay();
 
@@ -467,18 +466,18 @@ new class extends Component {
                 return $item->hour . '_' . $item->line;
             });
 
-        // 4. Define working hours:  6 AM to 4 PM (6:00 to 16:00 inclusive = 11 hours)
-        
+        // 4. Determine working hour range from project configuration
         $project = Project::where('ip', $this->ipAddress)->first();
-        $workingHoursService = app(WorkingHoursService::class);
-        $workingHours = $workingHoursService->getProjectWorkingHours($project->id);
-        if(!empty($workingHours)) {
-            $start = $date->copy()->setTime(Carbon::parse($workingHours[0]['start_time'])->hour, Carbon::parse($workingHours[0]['start_time'])->minute);
-            $end   = $date->copy()->setTime(Carbon::parse($workingHours[0]['end_time'])->hour, Carbon::parse($workingHours[0]['end_time'])->minute);
-        } else {
-            $workingHours = ['start' => 6, 'end' => 16];
-            $start = $date->copy()->setTime($workingHours['start'], 0);
-            $end   = $date->copy()->setTime($workingHours['end'], 0);
+        $startHour = 6;
+        $endHour = 16;
+
+        if ($project) {
+            $workingHoursService = app(WorkingHoursService::class);
+            $workingHours = $workingHoursService->getProjectWorkingHours($project->id);
+            if (!empty($workingHours)) {
+                $startHour = Carbon::parse($workingHours[0]['start_time'])->hour;
+                $endHour = Carbon::parse($workingHours[0]['end_time'])->hour;
+            }
         }
 
         $labels = [];
@@ -496,13 +495,12 @@ new class extends Component {
             ];
         }
 
-        // 6. Fill data for each working hour
-        foreach ($workingHours as $workingHour) {
-            // Format label as "07:00", "08:00", ..., "16:00"
-            $labels[] = $workingHour['start_time'] . ':00';
+        // 6. Fill data for each hour in the working range
+        for ($hour = $startHour; $hour <= $endHour; $hour++) {
+            $labels[] = sprintf('%02d:00', $hour);
 
             foreach ($lines as $line) {
-                $key = $workingHour['start_time'] . '_' . $line;
+                $key = $hour . '_' . $line;
                 $value = $results->get($key) ? (int) $results->get($key)->alarm_count : 0;
                 $datasets[$line]['data'][] = $value;
             }

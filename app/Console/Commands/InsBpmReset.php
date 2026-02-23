@@ -13,6 +13,9 @@ use ModbusTcpClient\Utils\Types;
 
 class InsBpmReset extends Command
 {
+    private const MAX_RETRIES = 3;
+    private const RETRY_DELAY_MS = 500;
+
     /**
      * The name and signature of the console command.
      *
@@ -51,7 +54,6 @@ class InsBpmReset extends Command
 
             try {
                 $this->resetDevice($device);
-                $this->reinit($device);
                 $successCount++;
             } catch (\Throwable $th) {
                 $this->error("✗ Error resetting {$device->name} ({$device->ip_address}): " . $th->getMessage() . " on line " . $th->getLine());
@@ -65,74 +67,54 @@ class InsBpmReset extends Command
     }
 
     /**
+     * Retry a callback up to MAX_RETRIES times with a delay between attempts.
+     */
+    private function retry(callable $callback, string $operationLabel): void
+    {
+        $lastException = null;
+
+        for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
+            try {
+                $callback();
+                return;
+            } catch (\Exception $e) {
+                $lastException = $e;
+
+                if ($this->option('v')) {
+                    $this->warn("    ⟳ {$operationLabel} failed (attempt {$attempt}/" . self::MAX_RETRIES . "): " . $e->getMessage());
+                }
+
+                if ($attempt < self::MAX_RETRIES) {
+                    usleep(self::RETRY_DELAY_MS * 1000);
+                }
+            }
+        }
+
+        throw $lastException;
+    }
+
+    /**
      * Reset a single device by writing 1 to all reset addresses
      */
     private function resetDevice(InsBpmDevice $device)
     {
         $unit_id = 1; // Standard Modbus unit ID
         $resetAddr = $device->config['addr_reset'] ?? null;
-        try {
-            // Build Modbus coils
+
+        $this->retry(function () use ($device, $unit_id, $resetAddr) {
             $request = WriteCoilsBuilder::newWriteMultipleCoils(
-                'tcp://' . $device->ip_address . ':503', 
+                'tcp://' . $device->ip_address . ':503',
                 $unit_id,
                 1
             )
-            ->coil($resetAddr,1) // <-- Write a single 'true' (1) value
+            ->coil($resetAddr, 1)
             ->build();
 
-            // Execute Modbus write request
-            $response = (new NonBlockingClient(['readTimeoutSec' => 2]))->sendRequests($request);
-            if ($this->option('v')) {
-                $this->info("  ✓ Reset signal sent to line {$device->line} at address {$resetAddr}");
-            }
+            (new NonBlockingClient(['readTimeoutSec' => 2]))->sendRequests($request);
+        }, "Reset {$device->name} line {$device->line} addr {$resetAddr}");
 
-        } catch (\Exception $e) {
-            $this->error("    ✗ Error resetting line {$device->line} at address {$resetAddr}: " . $e->getMessage() . "\n" . $e->getLine());
-            throw $e; // Re-throw to be caught by parent try-catch
-        }
-    }
-
-    private function reinit(InsBpmDevice $device)
-    {
-        $unit_id = 1; // Standard Modbus unit ID
-        
-        try {
-            // Prepare array of 8 zero values for addresses 10-17
-            $values = [
-                Types::toRegister(0), // Address 10 - M1_Hot
-                Types::toRegister(0), // Address 11 - M1_Cold
-                Types::toRegister(0), // Address 12 - M2_Hot
-                Types::toRegister(0), // Address 13 - M2_Cold
-                Types::toRegister(0), // Address 14 - M3_Hot
-                Types::toRegister(0), // Address 15 - M3_Cold
-                Types::toRegister(0), // Address 16 - M4_Hot
-                Types::toRegister(0), // Address 17 - M4_Cold
-            ];
-
-            // Write all registers using WriteMultipleRegistersRequest
-            $connection = BinaryStreamConnection::getBuilder()
-                ->setHost($device->ip_address)
-                ->setPort(503)
-                ->build();
-            
-            $packet = new WriteMultipleRegistersRequest(
-                10, // Starting address
-                $values, // Array of 8 zero values
-                $unit_id
-            );
-            
-            $connection->connect();
-            $connection->send($packet);
-            $connection->close();
-
-            if ($this->option('v')) {
-                $this->info("  ✓ Reinitialized all counters (addresses 10-17) to 0 for {$device->name}");
-            }
-
-        } catch (\Exception $e) {
-            $this->error("    ✗ Error reinitializing {$device->name}: " . $e->getMessage());
-            throw $e; // Re-throw to be caught by parent try-catch
+        if ($this->option('v')) {
+            $this->info("  ✓ Reset signal sent to line {$device->line} at address {$resetAddr}");
         }
     }
 }
