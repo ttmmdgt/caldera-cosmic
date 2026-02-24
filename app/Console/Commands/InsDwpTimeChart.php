@@ -12,6 +12,12 @@ use ModbusTcpClient\Packet\ModbusFunction\WriteSingleRegisterRequest;
 use ModbusTcpClient\Utils\Types;
 class InsDwpTimeChart extends Command
 {
+    private const CONTROL_ADDRESS = 7000;
+    private const COUNT_ADDRESS = 7001;
+    private const DATA_START_ADDRESS = 7002;
+    private const CHART_LENGTH = 10; // 7-11 and 13-17
+    private const WORKING_HOURS = [7, 8, 9, 10, 11, 13, 14, 15, 16, 17];
+
      // Configuration variables
     protected $pollIntervalSeconds = 1;
     protected $modbusTimeoutSeconds = 2;
@@ -52,8 +58,11 @@ class InsDwpTimeChart extends Command
             $this->comment("→ Processing {$device->name} ({$device->ip_address})");
 
             try {
-                $this->sendAlarmCount($device);
-                $successCount++;
+                if ($this->sendAlarmCount($device)) {
+                    $successCount++;
+                } else {
+                    $errorCount++;
+                }
             } catch (\Throwable $th) {
                 $this->error("✗ Error processing {$device->name} ({$device->ip_address}): " . $th->getMessage());
                 $errorCount++;
@@ -65,7 +74,7 @@ class InsDwpTimeChart extends Command
         return $errorCount > 0 ? 1 : 0;
     }
 
-    private function sendAlarmCount($device)
+    private function sendAlarmCount(InsDwpDevice $device): bool
     {
         // Get lines managed by this device
         $lines = $device->getLines();
@@ -79,24 +88,17 @@ class InsDwpTimeChart extends Command
             return true;
         }
 
-        // Today's date range
-        $startAt = Carbon::now()->startOfDay();
-        $endAt = Carbon::now()->endOfDay();
-        
-        // Working hours (8 AM to 5 PM, skipping 12 PM for rest time)
-        $workingHours = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
-        
-        // Chart configuration addresses (from HMI config)
-        $controlAddress = 7000;  // RW-7000: Control/trigger address
-        $countAddress = 7001;    // RW-7001: Number of data points (not used by HMI, but kept for compatibility)
-        $dataStartAddress = 7002;  // RW-7002: Chart data starts here (see HMI config)
-        
-        if ($this->option('dry-run')) {
+        $dryRun = (bool) $this->option('dry-run');
+
+        if ($dryRun) {
             $this->warn("    🔍 DRY RUN MODE - No data will be sent");
         }
-        
+
+        $connection = null;
+        $dayStart = Carbon::now()->startOfDay();
+
         try {
-            if (!$this->option('dry-run')) {
+            if (!$dryRun) {
                 $connection = BinaryStreamConnection::getBuilder()
                     ->setHost($device->ip_address)
                     ->setPort($this->modbusPort)
@@ -108,14 +110,11 @@ class InsDwpTimeChart extends Command
                 $connection->connect();
             }
 
-            // Chart configuration
-            $chartLength = 11; // HMI expects 10 data points (see config)
-            
-            // Send data point count first (RW-7001 = 9)
-            if (!$this->option('dry-run')) {
-                $modbusCountAddress = $countAddress - 1;
-                $this->info("    → Sending data count ({$chartLength}) to PLC address {$countAddress} (Modbus: {$modbusCountAddress})");
-                $countPacket = new WriteSingleRegisterRequest($modbusCountAddress, $chartLength, 1);
+            // Send data point count first (RW-7001)
+            if (!$dryRun) {
+                $modbusCountAddress = self::COUNT_ADDRESS - 1;
+                $this->info("    → Sending data count (" . self::CHART_LENGTH . ") to PLC address " . self::COUNT_ADDRESS . " (Modbus: {$modbusCountAddress})");
+                $countPacket = new WriteSingleRegisterRequest($modbusCountAddress, self::CHART_LENGTH, 1);
                 $connection->send($countPacket);
                 usleep(100000); // 100ms delay
             }
@@ -129,36 +128,18 @@ class InsDwpTimeChart extends Command
                 
                 if ($this->option('test')) {
                     // Send test data to verify chart is working
-                    $hourlyData = [1, 21, 3, 1, 0, 0, 0, 0, 0];
+                    $hourlyData = [1, 21, 3, 1, 0, 0, 0, 0, 0, 0];
                     if ($this->option('v')) {
                         $this->info("    → Using TEST data for line {$line}");
                     }
                 } else {
-                    // Fetch real data from database
-                    foreach ($workingHours as $hour) {
-                        $hourStart = Carbon::now()->startOfDay()->addHours($hour);
-                        $hourEnd = $hourStart->copy()->addHour();
-                        
-                        // Get alarm count for this hour
-                        $alarmCount = InsDwpTimeAlarmCount::where('line', $line)
-                            ->whereBetween('created_at', [$hourStart, $hourEnd])
-                            ->sum('incremental');
-                        
-                        $hourlyData[] = (int) $alarmCount;
-                    }
-                }
-                
-                // Ensure we have exactly 8 data points (padding with 0 if needed)
-                if (count($hourlyData) < $chartLength) {
-                    $hourlyData = array_pad($hourlyData, $chartLength, 0);
-                } elseif (count($hourlyData) > $chartLength) {
-                    $hourlyData = array_slice($hourlyData, 0, $chartLength);
+                    $hourlyData = $this->buildHourlyData($line, $dayStart);
                 }
                 
                 $this->info("    → Line {$line} hourly data: " . implode(', ', $hourlyData));
                 
                 // Calculate data address for this line
-                $lineDataAddress = $dataStartAddress + ($lineIndex * $chartLength);
+                $lineDataAddress = self::DATA_START_ADDRESS + ($lineIndex * self::CHART_LENGTH);
                 $modbusDataAddress = $lineDataAddress - 1;
                 
                 $this->info("    → Sending chart data to PLC addresses {$lineDataAddress}-" . ($lineDataAddress + count($hourlyData) - 1) . " (Modbus: {$modbusDataAddress})");
@@ -168,7 +149,7 @@ class InsDwpTimeChart extends Command
                     return Types::toInt16((int) $value);
                 }, $hourlyData);
                 
-                if ($this->option('dry-run')) {
+                if ($dryRun) {
                     $this->warn("    📤 Would send to {$device->ip_address}:{$this->modbusPort}");
                 } else {
                     // Write all data at once using WriteMultipleRegisters
@@ -180,29 +161,59 @@ class InsDwpTimeChart extends Command
             }
             
             // After ALL lines data is written, send count and trigger refresh
-            if (!$this->option('dry-run')) {
+            if (!$dryRun) {
                 // Small delay before trigger
                 usleep(100000); // 100ms delay
                 
                 // Trigger chart update by writing 1 to control address RW-7000
-                $modbusControlAddress = $controlAddress - 1;
+                $modbusControlAddress = self::CONTROL_ADDRESS - 1;
                 
-                $this->info("    → Triggering chart update at PLC address {$controlAddress} (Modbus: {$modbusControlAddress})");
+                $this->info("    → Triggering chart update at PLC address " . self::CONTROL_ADDRESS . " (Modbus: {$modbusControlAddress})");
                 $triggerPacket = new WriteSingleRegisterRequest($modbusControlAddress, 1, 1);
                 $connection->send($triggerPacket);
                 
                 $this->info("    ✓ Chart refresh triggered successfully");
             }
-            
-            if (!$this->option('dry-run')) {
+        } catch (\Throwable $e) {
+            $this->error("    ✗ Error sending chart data to {$device->name} ({$device->ip_address}): " . $e->getMessage());
+            if ($this->option('d')) {
+                $this->error("    Stack trace: " . $e->getTraceAsString());
+            }
+            return false;
+        } finally {
+            if ($connection !== null) {
                 $connection->close();
             }
-        } catch (\Exception $e) {
-            $this->error("    ✗ Error sending chart data to {$device->name} ({$device->ip_address}): " . $e->getMessage());
-            $this->error("    Stack trace: " . $e->getTraceAsString());
-            return false;
         }
         
         return true;
+    }
+
+    private function buildHourlyData(string $line, Carbon $dayStart): array
+    {
+        $hourlyData = [];
+
+        foreach (self::WORKING_HOURS as $hour) {
+            $hourStart = $dayStart->copy()->addHours($hour);
+            $hourEnd = $hourStart->copy()->addHour();
+
+            // Use [start, end) to avoid counting the same record on hour boundaries.
+            $alarmCount = InsDwpTimeAlarmCount::where('line', $line)
+                ->where('created_at', '>=', $hourStart)
+                ->where('created_at', '<', $hourEnd)
+                ->sum('incremental');
+
+            $hourlyData[] = (int) $alarmCount;
+        }
+
+        if (count($hourlyData) < self::CHART_LENGTH) {
+            return array_pad($hourlyData, self::CHART_LENGTH, 0);
+        }
+
+        if (count($hourlyData) > self::CHART_LENGTH) {
+            return array_slice($hourlyData, 0, self::CHART_LENGTH);
+        }
+
+        return $hourlyData;
     }
 }

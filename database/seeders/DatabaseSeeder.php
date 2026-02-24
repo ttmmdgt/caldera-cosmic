@@ -33,6 +33,7 @@ class DatabaseSeeder extends Seeder
                 InsDwpCountSeeder::class,
                 InsDwpTimeAlarmCountSeeder::class,
                 InsBpmCountSeeder::class, // BPM (Button Push Monitor) seeder
+                InsIbmsCountSeeder::class,
             ]);
         }
     }

@@ -11,8 +11,12 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('ins_ph_dosing_auths', function (Blueprint $table) {
-            //
+        Schema::create('ins_ip_blend_counts', function (Blueprint $table) {
+            $table->id();
+            $table->string('shift')->nullable();
+            $table->time('duration')->nullable();
+            $table->json('data')->nullable();
+            $table->timestamps();
         });
     }
 
@@ -21,8 +25,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('ins_ph_dosing_auths', function (Blueprint $table) {
-            //
-        });
+        Schema::dropIfExists('ins_ip_blend_counts');
     }
 };
