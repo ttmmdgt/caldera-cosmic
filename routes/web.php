@@ -312,6 +312,7 @@ Route::prefix('insights')->group(function () {
 
     // ============================================//
     // PDS ROUTES
+    // NOTE: pH Dossing  system
     // ============================================//
     Route::name('insights.pds.')->group(function () {
         Volt::route('/pds/data', 'insights.pds.data.index')->name('data.index');
@@ -319,6 +320,20 @@ Route::prefix('insights')->group(function () {
         Volt::route('/pds/manage/devices', 'insights.pds.manage.devices')->name('manage.devices');
         Volt::route('/pds/manage', 'insights.pds.manage.index')->name('manage.index');
         Volt::route('/pds/manage/formulas', 'insights.pds.manage.formulas')->name('manage.formulas');
+    });
+
+    // ===========================================//
+    // IP Blending Monitoring System (IBMS) ROUTES
+    // ===========================================//
+    Route::name('insights.ibms.')->group(function () {
+        Volt::route('/ibms/data', 'insights.ibms.data.index')->name('data.index');
+        Volt::route('/ibms/manage/authorizations', 'insights.ibms.manage.auths')->name('manage.auths');
+        Volt::route('/ibms/manage/devices', 'insights.ibms.manage.devices')->name('manage.devices');
+        Volt::route('/ibms/manage', 'insights.ibms.manage.index')->name('manage.index');
+
+        Route::get('/ibms', function () {
+            return redirect()->route('insights.ibms.data.index');
+        })->name('index');
     });
 
     Volt::route('/', 'insights.index')->name('insights');
